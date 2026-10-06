@@ -255,10 +255,13 @@ fn position_pinned_panel_right(app_handle: &AppHandle) -> Result<()> {
     let pinned_size = pinned.outer_size().map_err(|e| anyhow::anyhow!(e))?;
     let scale = main.scale_factor().map_err(|e| anyhow::anyhow!(e))?;
     let gap = (8.0 * scale).round() as i32;
-    let center_x = main_pos.x + main_size.width as i32 / 2;
-    let center_y = main_pos.y + main_size.height as i32 / 2;
+    let center = tauri::PhysicalPosition::new(
+        main_pos.x as f64 + main_size.width as f64 / 2.0,
+        main_pos.y as f64 + main_size.height as f64 / 2.0,
+    )
+    .to_logical::<f64>(scale);
     let monitor = main
-        .monitor_from_point(center_x as f64, center_y as f64)
+        .monitor_from_point(center.x, center.y)
         .map_err(|e| anyhow::anyhow!(e))?;
 
     let mut main_x = main_pos.x;
