@@ -48,10 +48,9 @@ interface ClipboardCardProps {
 }
 
 /**
- * 按 `kind` 分发到具体卡片组件，统一外层 padding / 时间戳 / 来源应用图标。
- * `isSelected` 为 true 时高亮背景与边框；指针事件由列表注入用于 hover preview；
- * 右键根节点弹出 Rust 端原生菜单（避免 tauri-apps/tauri#9470 的 muda use-after-free），
- * 点击菜单项后由列表层订阅 `clipboard://menu-action` 派发到实际处理逻辑。
+ * 按 `kind` 分发到具体卡片组件。卡片不再保留“来源应用 + HTML/文本/链接/图片”
+ * 的独立标题行，把纵向空间优先留给真实剪贴板内容；快捷动作仅在 hover 时叠加显示。
+ * `isSelected` 为 true 时高亮背景与边框；指针事件由列表注入用于 hover preview。
  */
 const ClipboardCard: FC<ClipboardCardProps> = (props) => {
   const {
@@ -140,44 +139,41 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
       role="option"
       tabIndex={-1}
     >
-      <div className="flex h-6 items-center justify-between text-ant-secondary text-xs">
-        <div className="flex items-center gap-1">
-          {item.priorityOrder !== null && !item.isPinned ? (
-            <span className="inline-flex min-w-5 items-center justify-center rounded-1 bg-ant-warning-bg px-1 font-medium text-ant-warning-text">
-              {item.priorityOrder}
-            </span>
-          ) : null}
-          {item.isPinned && item.pinOrder !== null ? (
-            <span className="inline-flex min-w-5 items-center justify-center rounded-1 bg-ant-primary-bg px-1 font-medium text-ant-primary">
-              {item.pinOrder}
-            </span>
-          ) : null}
-          {hintKey ? (
-            <KeyHint hintKey={hintKey} onKeyPress={onQuickPaste}>
-              <span className="size-4" />
-            </KeyHint>
-          ) : null}
+      {hintKey ? (
+        <div className="absolute top-2 left-2 z-10">
+          <KeyHint hintKey={hintKey} onKeyPress={onQuickPaste}>
+            <span className="size-4" />
+          </KeyHint>
         </div>
+      ) : null}
 
-        <ClipboardQuickActions
-          item={item}
-          labels={quickActionLabels}
-          onQuickAction={onQuickAction}
-          quickActions={quickActions}
-          visible={hovered}
-        />
+      {hovered &&
+      quickActions.length > 0 &&
+      quickActionLabels &&
+      onQuickAction ? (
+        <div className="absolute top-2 right-2 z-10 rounded-1.5 bg-ant-elevated shadow-sm">
+          <ClipboardQuickActions
+            item={item}
+            labels={quickActionLabels}
+            onQuickAction={onQuickAction}
+            quickActions={quickActions}
+            visible
+          />
+        </div>
+      ) : null}
+
+      <div className={cn({ "pl-6": Boolean(hintKey) })}>
+        {item.note ? (
+          <NoteContentSwitcher
+            note={item.note}
+            showOriginal={showOriginalOnHover && hovered}
+          >
+            {body}
+          </NoteContentSwitcher>
+        ) : (
+          body
+        )}
       </div>
-
-      {item.note ? (
-        <NoteContentSwitcher
-          note={item.note}
-          showOriginal={showOriginalOnHover && hovered}
-        >
-          {body}
-        </NoteContentSwitcher>
-      ) : (
-        body
-      )}
       {showStatusIndicators
         ? renderStatusIndicators(item.isPinned, showSensitiveIndicator)
         : null}
