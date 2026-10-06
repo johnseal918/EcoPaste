@@ -243,6 +243,10 @@ fn apply_clipboard_window_layout(app_handle: &AppHandle) -> Result<()> {
 /// 保存当前所有窗口的几何信息。供应用退出（`RunEvent::ExitRequested`）时调用，
 /// 覆盖「调整大小后不关窗直接退出」这一隐藏/关闭都漏掉的场景。
 /// 让置顶面板始终位于主剪贴板窗口右侧；右边不足时整体向左平移，不切换到左侧。
+pub fn sync_pinned_panel_position(app_handle: &AppHandle) -> Result<()> {
+    position_pinned_panel_right(app_handle)
+}
+
 fn position_pinned_panel_right(app_handle: &AppHandle) -> Result<()> {
     let main = get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?;
     let pinned = get_window(app_handle, PINNED_PANEL_WINDOW_LABEL)?;
