@@ -1074,7 +1074,7 @@ export const toggleClipboardItemPinned = async (
 export const addClipboardItemPriority = (id: string) => {
   return call<number>(
     TAURI_COMMAND.ADD_CLIPBOARD_ITEM_PRIORITY,
-    "commands:labels.updateClipboardItem",
+    "commands:labels.updateClipboardOrder",
     { id },
   );
 };
@@ -1083,7 +1083,7 @@ export const addClipboardItemPriority = (id: string) => {
 export const moveClipboardItemPriority = (id: string, position: number) => {
   return call<number>(
     TAURI_COMMAND.MOVE_CLIPBOARD_ITEM_PRIORITY,
-    "commands:labels.updateClipboardItem",
+    "commands:labels.updateClipboardOrder",
     { id, position },
   );
 };
@@ -1092,7 +1092,7 @@ export const moveClipboardItemPriority = (id: string, position: number) => {
 export const cancelClipboardItemPriority = (id: string) => {
   return call<void>(
     TAURI_COMMAND.CANCEL_CLIPBOARD_ITEM_PRIORITY,
-    "commands:labels.updateClipboardItem",
+    "commands:labels.updateClipboardOrder",
     { id },
   );
 };
@@ -1101,7 +1101,7 @@ export const cancelClipboardItemPriority = (id: string) => {
 export const movePinnedClipboardItem = (id: string, position: number) => {
   return call<number>(
     TAURI_COMMAND.MOVE_PINNED_CLIPBOARD_ITEM,
-    "commands:labels.updateClipboardItem",
+    "commands:labels.updateClipboardOrder",
     { id, position },
   );
 };
