@@ -1169,14 +1169,46 @@ async fn merge_items(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     backup: &SqlitePool,
 ) -> Result<MergeOutcome> {
-    let rows = sqlx::query_as::<_, BackupItemRow>(
-        "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-         summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
-         created_at, updated_at FROM clipboard_items ORDER BY created_at ASC",
+    let order_column_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('clipboard_items') \
+         WHERE name IN ('manual_order', 'pin_order')",
     )
-    .fetch_all(backup)
+    .fetch_one(backup)
     .await
-    .context("failed to read backup items")?;
+    .context("failed to inspect backup clipboard ordering columns")?;
+
+    let select_sql = if order_column_count == 2 {
+        "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
+         summary, file_types, size, width, height, use_count, is_favorite, is_pinned, \
+         manual_order, pin_order, is_sensitive, platform, note, created_at, updated_at \
+         FROM clipboard_items ORDER BY created_at ASC"
+    } else {
+        "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
+         summary, file_types, size, width, height, use_count, is_favorite, is_pinned, \
+         NULL AS manual_order, NULL AS pin_order, is_sensitive, platform, note, created_at, updated_at \
+         FROM clipboard_items ORDER BY created_at ASC"
+    };
+
+    let rows = sqlx::query_as::<_, BackupItemRow>(select_sql)
+        .fetch_all(backup)
+        .await
+        .context("failed to read backup items")?;
+
+    let manual_offset: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(manual_order), 0) FROM clipboard_items \
+         WHERE is_pinned = 0 AND manual_order IS NOT NULL",
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .context("failed to read current manual-order offset")?;
+    let pin_offset: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(pin_order), 0) FROM clipboard_items \
+         WHERE is_pinned = 1 AND pin_order IS NOT NULL",
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .context("failed to read current pin-order offset")?;
+    let mut legacy_pin_tail = pin_offset;
 
     let mut imported_items = 0;
     let mut skipped_items = 0;
@@ -1194,12 +1226,26 @@ async fn merge_items(
             continue;
         }
 
+        let manual_order = (!row.is_pinned)
+            .then(|| row.manual_order.map(|position| manual_offset + position))
+            .flatten();
+        let pin_order = if row.is_pinned {
+            if let Some(position) = row.pin_order {
+                Some(pin_offset + position)
+            } else {
+                legacy_pin_tail += 1;
+                Some(legacy_pin_tail)
+            }
+        } else {
+            None
+        };
+
         sqlx::query(
             "INSERT OR IGNORE INTO clipboard_items \
              (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-              summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
-              created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              summary, file_types, size, width, height, use_count, is_favorite, is_pinned, \
+              manual_order, pin_order, is_sensitive, platform, note, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(row.id)
         .bind(row.kind)
@@ -1217,6 +1263,8 @@ async fn merge_items(
         .bind(row.use_count)
         .bind(row.is_favorite)
         .bind(row.is_pinned)
+        .bind(manual_order)
+        .bind(pin_order)
         .bind(row.is_sensitive)
         .bind(row.platform)
         .bind(row.note)
@@ -1227,6 +1275,8 @@ async fn merge_items(
         .context("failed to import item")?;
         imported_items += 1;
     }
+
+    normalize_imported_item_orders(tx).await?;
 
     Ok(MergeOutcome {
         imported_items,
@@ -1252,11 +1302,47 @@ struct BackupItemRow {
     use_count: i64,
     is_favorite: bool,
     is_pinned: bool,
+    manual_order: Option<i64>,
+    pin_order: Option<i64>,
     is_sensitive: bool,
     platform: String,
     note: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+}
+
+async fn normalize_imported_item_orders(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+) -> Result<()> {
+    sqlx::query(
+        "WITH ordered AS ( \
+             SELECT id, ROW_NUMBER() OVER (ORDER BY manual_order ASC, created_at ASC, id ASC) AS position \
+             FROM clipboard_items \
+             WHERE is_pinned = 0 AND manual_order IS NOT NULL \
+         ) \
+         UPDATE clipboard_items \
+         SET manual_order = (SELECT position FROM ordered WHERE ordered.id = clipboard_items.id) \
+         WHERE id IN (SELECT id FROM ordered)",
+    )
+    .execute(&mut **tx)
+    .await
+    .context("failed to normalize imported manual order")?;
+
+    sqlx::query(
+        "WITH ordered AS ( \
+             SELECT id, ROW_NUMBER() OVER (ORDER BY pin_order ASC, created_at ASC, id ASC) AS position \
+             FROM clipboard_items \
+             WHERE is_pinned = 1 \
+         ) \
+         UPDATE clipboard_items \
+         SET pin_order = (SELECT position FROM ordered WHERE ordered.id = clipboard_items.id) \
+         WHERE id IN (SELECT id FROM ordered)",
+    )
+    .execute(&mut **tx)
+    .await
+    .context("failed to normalize imported pin order")?;
+
+    Ok(())
 }
 
 struct WatcherPauseRestore {
