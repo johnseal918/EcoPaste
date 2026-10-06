@@ -139,6 +139,7 @@ pub(super) fn show_for_clipboard_item(
     let (width, height) = compute_size(&groups);
     let payload = ContextMenuShowPayload {
         item_id: request.item_id.clone(),
+        target_window_label: request.target_window_label.clone(),
         is_favorite: request.is_favorite,
         is_pinned: request.is_pinned,
         groups,
