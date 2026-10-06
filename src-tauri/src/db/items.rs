@@ -392,7 +392,7 @@ async fn ordered_ids_tx(
         OrderKind::Pinned => {
             "SELECT id FROM clipboard_items \
              WHERE is_pinned = 1 \
-             ORDER BY pin_order ASC, created_at ASC, id ASC"
+             ORDER BY pin_order IS NULL, pin_order ASC, created_at DESC, id ASC"
         }
     };
     sqlx::query_scalar(sql)
