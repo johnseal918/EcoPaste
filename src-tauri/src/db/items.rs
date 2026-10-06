@@ -301,14 +301,19 @@ pub async fn add_item_priority(pool: &SqlitePool, id: &str) -> Result<i64> {
 
 /// 取消普通手动排序，并压紧剩余序号。
 pub async fn cancel_item_priority(pool: &SqlitePool, id: &str) -> Result<()> {
-    let mut tx = pool.begin().await.context("failed to begin priority transaction")?;
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin priority transaction")?;
     sqlx::query("UPDATE clipboard_items SET priority_order = NULL WHERE id = ?")
         .bind(id)
         .execute(&mut *tx)
         .await
         .context("failed to cancel clipboard item priority")?;
     compact_order_tx(&mut tx, OrderKind::Priority).await?;
-    tx.commit().await.context("failed to commit priority transaction")?;
+    tx.commit()
+        .await
+        .context("failed to commit priority transaction")?;
     Ok(())
 }
 
