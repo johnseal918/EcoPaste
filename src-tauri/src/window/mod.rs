@@ -74,13 +74,22 @@ pub fn set_clipboard_window_auto_hide_suspended(suspended: bool) {
     CLIPBOARD_WINDOW_AUTO_HIDE_SUSPENDED.store(suspended, Ordering::Relaxed);
 }
 
-pub fn set_clipboard_window_editing(app_handle: &AppHandle, editing: bool) -> Result<()> {
+pub fn set_clipboard_window_editing(
+    app_handle: &AppHandle,
+    label: &str,
+    editing: bool,
+) -> Result<()> {
+    if !matches!(label, CLIPBOARD_WINDOW_LABEL | PINNED_PANEL_WINDOW_LABEL) {
+        return Ok(());
+    }
+
     #[cfg(target_os = "windows")]
-    return windows::set_clipboard_window_editing(app_handle, editing);
+    return windows::set_clipboard_window_editing(app_handle, label, editing);
 
     #[cfg(target_os = "macos")]
     {
         let _ = app_handle;
+        let _ = label;
         let _ = editing;
 
         Ok(())
