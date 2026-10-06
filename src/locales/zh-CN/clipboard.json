@@ -112,5 +112,14 @@
     "rtf": "RTF",
     "text": "文本",
     "url": "链接"
+  },
+  "ordering": {
+    "positionTitle": "移动到指定位置",
+    "positionLabel": "位置",
+    "positionPlaceholder": "输入序号"
+  },
+  "pinnedPanel": {
+    "title": "置顶",
+    "empty": "暂无置顶内容"
   }
 }
