@@ -120,6 +120,10 @@
   },
   "pinnedPanel": {
     "title": "Pinned",
-    "empty": "No pinned items"
+    "empty": "No pinned items",
+    "moveFirst": "Move to First",
+    "moveLast": "Move to Last",
+    "moveTo": "Move to Position…",
+    "unpin": "Unpin"
   }
 }
