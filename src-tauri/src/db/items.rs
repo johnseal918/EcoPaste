@@ -457,6 +457,11 @@ pub async fn delete_item(pool: &SqlitePool, id: &str) -> Result<Option<String>> 
     .fetch_optional(pool)
     .await
     .context("failed to delete clipboard item")?;
+
+    if row.is_some() {
+        normalize_item_orders(pool).await?;
+    }
+
     Ok(row.and_then(|(kind, content)| image_file_name(kind, content)))
 }
 
@@ -485,6 +490,10 @@ pub async fn delete_items(pool: &SqlitePool, ids: &[String]) -> Result<u64> {
         .execute(pool)
         .await
         .context("failed to delete clipboard items")?;
+    if result.rows_affected() > 0 {
+        normalize_item_orders(pool).await?;
+    }
+
     Ok(result.rows_affected())
 }
 
@@ -536,6 +545,10 @@ pub async fn cleanup_history(
         absorb_deleted(&mut outcome, rows);
     }
 
+    if outcome.removed > 0 {
+        normalize_item_orders(pool).await?;
+    }
+
     Ok(outcome)
 }
 
@@ -575,6 +588,10 @@ pub async fn clear_items(
 
     let mut outcome = CleanupOutcome::default();
     absorb_deleted(&mut outcome, rows);
+    if outcome.removed > 0 {
+        normalize_item_orders(pool).await?;
+    }
+
     Ok(outcome)
 }
 
@@ -1315,6 +1332,47 @@ mod tests {
 
         // 记录不存在：同样返回 None，不报错。
         assert_eq!(delete_item(&pool, "missing").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn deleting_ordered_items_compacts_remaining_sequences() {
+        let pool = memory_pool().await;
+        for id in ["a", "b", "c", "d"] {
+            insert_item(&pool, &sample_item(id)).await.unwrap();
+        }
+
+        add_item_priority(&pool, "a").await.unwrap();
+        add_item_priority(&pool, "b").await.unwrap();
+        add_item_priority(&pool, "c").await.unwrap();
+        toggle_item_pinned(&pool, "c").await.unwrap();
+        toggle_item_pinned(&pool, "d").await.unwrap();
+
+        delete_item(&pool, "a").await.unwrap();
+        delete_item(&pool, "c").await.unwrap();
+
+        let normal = query_items(
+            &pool,
+            &ClipboardItemQuery {
+                pinned: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let b = normal.iter().find(|item| item.id == "b").unwrap();
+        assert_eq!(b.priority_order, Some(1));
+
+        let pinned = query_items(
+            &pool,
+            &ClipboardItemQuery {
+                pinned: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(ids(&pinned), ["d"]);
+        assert_eq!(pinned[0].pin_order, Some(1));
     }
 
     #[tokio::test]
