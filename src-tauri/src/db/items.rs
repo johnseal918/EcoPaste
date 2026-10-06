@@ -274,13 +274,14 @@ pub async fn add_item_to_manual_order(pool: &SqlitePool, id: &str) -> Result<()>
         return Err(anyhow::anyhow!("pinned item cannot join manual history order").into());
     }
 
-    let exists: Option<i64> =
-        sqlx::query_scalar("SELECT manual_order FROM clipboard_items WHERE id = ?")
-            .bind(id)
-            .fetch_optional(pool)
-            .await
-            .context("failed to read clipboard item manual order")?;
-    if exists.flatten().is_some() {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT manual_order IS NOT NULL FROM clipboard_items WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .context("failed to read clipboard item manual order")?;
+    if exists {
         return Ok(());
     }
 
@@ -297,6 +298,21 @@ pub async fn add_item_to_manual_order(pool: &SqlitePool, id: &str) -> Result<()>
         .await
         .context("failed to add clipboard item to manual order")?;
     Ok(())
+}
+
+/// 返回条目的手动排序 / 置顶排序位置，供右键菜单按真实数据库状态决定操作项。
+pub async fn item_order_state(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<(Option<i64>, Option<i64>)> {
+    sqlx::query_as(
+        "SELECT manual_order, pin_order FROM clipboard_items WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .context("failed to read clipboard item order state")
+    .map_err(Into::into)
 }
 
 /// 将手动排序条目移动到 1-based 目标位置；超出末尾时自动夹到末尾。
