@@ -68,6 +68,7 @@ const KEY_HINTS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
 interface ClipboardUpdatedPayload {
   cleanup?: number;
   deduplicated?: boolean;
+  metadata?: string;
   id?: string;
   imported?: boolean;
   kind?: ClipboardKind;
@@ -217,6 +218,11 @@ const List: FC = () => {
     // 剪贴板窗口隐藏（冻结态）期间不立即 reload：只记 pending，避免隐藏期间频繁复制触发反复 IPC + 重渲染。
     if (!clipboardWindowVisibleRef.current) {
       deferredReloadRef.current = true;
+      return;
+    }
+
+    if (payload.metadata) {
+      requestReloadAtTop();
       return;
     }
 
