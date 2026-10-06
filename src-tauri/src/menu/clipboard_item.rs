@@ -116,7 +116,15 @@ impl ClipboardMenuAction {
             }
             Self::ToggleFavorite => Some("CmdOrCtrl+D"),
             Self::TogglePinned => Some("CmdOrCtrl+T"),
-            Self::MoveToGroup => None,
+            Self::AddPriority
+            | Self::PriorityFirst
+            | Self::PriorityLast
+            | Self::PriorityMoveTo
+            | Self::PriorityCancel
+            | Self::PinFirst
+            | Self::PinLast
+            | Self::PinMoveTo
+            | Self::MoveToGroup => None,
             Self::EditNote => Some("CmdOrCtrl+M"),
             Self::Delete => Some("CmdOrCtrl+Backspace"),
         }
@@ -141,6 +149,14 @@ pub(super) const ACTION_GROUPS: &[&[ClipboardMenuAction]] = &[
     &[
         ClipboardMenuAction::ToggleFavorite,
         ClipboardMenuAction::TogglePinned,
+        ClipboardMenuAction::AddPriority,
+        ClipboardMenuAction::PriorityFirst,
+        ClipboardMenuAction::PriorityLast,
+        ClipboardMenuAction::PriorityMoveTo,
+        ClipboardMenuAction::PriorityCancel,
+        ClipboardMenuAction::PinFirst,
+        ClipboardMenuAction::PinLast,
+        ClipboardMenuAction::PinMoveTo,
         ClipboardMenuAction::MoveToGroup,
         ClipboardMenuAction::EditNote,
     ],
