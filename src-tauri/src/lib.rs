@@ -274,10 +274,21 @@ pub fn run() {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
+        .on_window_event(|window_handle, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                if window::intercept_close_request(window) {
+                if window::intercept_close_request(window_handle) {
                     api.prevent_close();
+                }
+                return;
+            }
+
+            if window_handle.label() == window::CLIPBOARD_WINDOW_LABEL
+                && matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_))
+            {
+                if let Err(err) =
+                    window::sync_pinned_panel_position(window_handle.app_handle())
+                {
+                    log::warn!("sync pinned panel after clipboard geometry change failed: {err}");
                 }
             }
         })
