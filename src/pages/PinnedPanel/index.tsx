@@ -11,6 +11,7 @@ import {
 } from "@/commands";
 import { TAURI_EVENT } from "@/constants/events";
 import { useClipboardItems } from "@/hooks/useClipboardItems";
+import { useClipboardWindowEditableFocus } from "@/hooks/useClipboardWindowEditableFocus";
 import { useTauriListen } from "@/hooks/useTauriListen";
 import type { ClipboardItem } from "@/types/clipboard";
 import ClipboardCard from "../Clipboard/components/cards/ClipboardCard";
@@ -21,6 +22,8 @@ interface ClipboardUpdatedPayload {
 }
 
 const PinnedPanel: FC = () => {
+  useClipboardWindowEditableFocus();
+
   const { t } = useTranslation("clipboard");
   const [orderTarget, setOrderTarget] = useState<ClipboardItem | null>(null);
   const { getItem, loadedInitial, loading, loadRange, reload, total } =
@@ -40,14 +43,14 @@ const PinnedPanel: FC = () => {
 
   if (loading && !loadedInitial) {
     return (
-      <div className="flex size-screen items-center justify-center bg-ant-container">
+      <div className="flex h-screen w-screen items-center justify-center bg-ant-container">
         <Spin />
       </div>
     );
   }
 
   return (
-    <div className="flex size-screen flex-col overflow-hidden rounded-4 bg-ant-container">
+    <div className="flex h-screen w-screen flex-col overflow-hidden rounded-4 bg-ant-container">
       <div
         className="flex h-12 shrink-0 items-center gap-2 border-ant-border-secondary border-b px-3 font-medium"
         data-tauri-drag-region
