@@ -1,14 +1,11 @@
 import type { DragEvent, FC, MouseEvent, PointerEvent, Ref } from "react";
 import { useState } from "react";
-import { useTranslation } from "react-i18next";
 import { popupClipboardItemMenu, startDragClipboardItem } from "@/commands";
-import AssetImage from "@/components/AssetImage";
 import KeyHint from "@/components/KeyHint";
 import type { ItemActionLabels } from "@/constants/itemActions";
 import type { ClipboardAction, ClipboardItem } from "@/types/clipboard";
 import type { ItemAction } from "@/types/settings";
 import { cn } from "@/utils/cn";
-import { isMac } from "@/utils/is";
 import ClipboardQuickActions from "./ClipboardQuickActions";
 import FilesCard from "./FilesCard";
 import ImageCard from "./ImageCard";
@@ -50,7 +47,7 @@ interface ClipboardCardProps {
 }
 
 /**
- * 按 `kind` 分发到具体卡片组件，统一外层 padding / 时间戳 / 来源应用图标。
+ * 按 `kind` 分发到具体卡片组件，统一外层 padding、时间戳与状态标识。
  * `isSelected` 为 true 时高亮背景与边框；指针事件由列表注入用于 hover preview；
  * 右键根节点弹出 Rust 端原生菜单（避免 tauri-apps/tauri#9470 的 muda use-after-free），
  * 点击菜单项后由列表层订阅 `clipboard://menu-action` 派发到实际处理逻辑。
@@ -76,28 +73,10 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
     showOriginalOnHover = true,
     rootRef,
   } = props;
-  const { kind, sourceAppId, subKind, sourceAppIconPath, sourceAppName } = item;
-  const { t } = useTranslation("clipboard");
   const [hovered, setHovered] = useState(false);
-  const typeKey = subKind ?? kind;
-  const typeLabel = t(`types.${typeKey}`);
   const body = renderBody(item, isLinkActive, onOpenLink);
   const showSensitiveIndicator = item.isSensitive && item.kind === "text";
   const showStatusIndicators = item.isPinned || showSensitiveIndicator;
-  const sourceAppIcon = sourceAppId ? (
-    <AssetImage
-      alt={sourceAppName}
-      className="size-4"
-      src={sourceAppIconPath}
-    />
-  ) : (
-    <img
-      alt="EcoPaste"
-      className="pointer-events-none size-4"
-      src={isMac ? "/logo-mac.png" : "/logo.png"}
-    />
-  );
-
   const handleDragStart = async (event: DragEvent) => {
     event.preventDefault();
 
@@ -140,6 +119,7 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
         {
           "border-ant-primary bg-ant-blue-1": isSelected,
           "border-ant-primary bg-ant-container": item.isPinned && !isSelected,
+          "bg-ant-blue-1": item.manualOrder !== null && !isSelected,
         },
       )}
       draggable
@@ -155,38 +135,48 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
       role="option"
       tabIndex={-1}
     >
-      <div className="flex items-center justify-between text-ant-secondary text-xs">
-        <div className="flex min-w-0 items-center gap-1 overflow-hidden">
-          {hintKey ? (
-            <KeyHint hintKey={hintKey} onKeyPress={onQuickPaste}>
-              {sourceAppIcon}
-            </KeyHint>
-          ) : (
-            sourceAppIcon
-          )}
+      {hintKey ? (
+        <div className="absolute top-2 left-2 z-10">
+          <KeyHint hintKey={hintKey} onKeyPress={onQuickPaste}>
+            <span className="size-4" />
+          </KeyHint>
+        </div>
+      ) : null}
 
-          <span className="truncate">{typeLabel}</span>
+      <div className="flex min-w-0 items-start gap-2">
+        <div className="min-w-0 flex-1">
+          {item.note ? (
+            <NoteContentSwitcher
+              note={item.note}
+              showOriginal={showOriginalOnHover && hovered}
+            >
+              {body}
+            </NoteContentSwitcher>
+          ) : (
+            body
+          )}
         </div>
 
-        <ClipboardQuickActions
-          item={item}
-          labels={quickActionLabels}
-          onQuickAction={onQuickAction}
-          quickActions={quickActions}
-          visible={hovered}
-        />
+        <div className="shrink-0 text-ant-secondary text-xs">
+          <ClipboardQuickActions
+            item={item}
+            labels={quickActionLabels}
+            onQuickAction={onQuickAction}
+            quickActions={quickActions}
+            visible={hovered}
+          />
+        </div>
       </div>
-
-      {item.note ? (
-        <NoteContentSwitcher
-          note={item.note}
-          showOriginal={showOriginalOnHover && hovered}
-        >
-          {body}
-        </NoteContentSwitcher>
-      ) : (
-        body
-      )}
+      {item.isPinned && item.pinOrder !== null ? (
+        <span className="pointer-events-none absolute bottom-2 left-2 inline-flex min-w-5 items-center justify-center rounded-full bg-ant-primary px-1 text-ant-light-solid text-xs">
+          {item.pinOrder}
+        </span>
+      ) : null}
+      {!item.isPinned && item.manualOrder !== null ? (
+        <span className="pointer-events-none absolute bottom-2 left-2 inline-flex min-w-5 items-center justify-center rounded-full bg-ant-primary px-1 text-ant-light-solid text-xs">
+          {item.manualOrder}
+        </span>
+      ) : null}
       {showStatusIndicators
         ? renderStatusIndicators(item.isPinned, showSensitiveIndicator)
         : null}

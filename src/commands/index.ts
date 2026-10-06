@@ -66,6 +66,7 @@ export interface ContextMenuItemPayload {
 
 export interface ContextMenuShowPayload {
   itemId: string;
+  targetWindowLabel: string;
   isFavorite: boolean;
   isPinned: boolean;
   groups: Array<Array<ContextMenuItemPayload>>;
@@ -76,6 +77,7 @@ export interface ShowContextSubmenuInput {
   anchor: ContextSubmenuAnchor;
   groups: ContextSubmenuGroupInput[];
   itemId: string;
+  targetWindowLabel: string;
 }
 
 export interface ClipboardPreviewState {
@@ -1068,6 +1070,56 @@ export const toggleClipboardItemPinned = async (
   );
 
   return next;
+};
+
+/**
+ * 将普通历史加入手动排序区，默认追加到末尾。
+ */
+export const addClipboardItemToManualOrder = (id: string) => {
+  return call<number>(
+    TAURI_COMMAND.ADD_CLIPBOARD_ITEM_TO_MANUAL_ORDER,
+    "commands:labels.updateClipboardItem",
+    { id },
+  );
+};
+
+/**
+ * 从普通历史手动排序区移除。
+ */
+export const removeClipboardItemFromManualOrder = (id: string) => {
+  return call<void>(
+    TAURI_COMMAND.REMOVE_CLIPBOARD_ITEM_FROM_MANUAL_ORDER,
+    "commands:labels.updateClipboardItem",
+    { id },
+  );
+};
+
+/**
+ * 移动普通历史手动排序项；后端会把位置限制在合法范围。
+ */
+export const moveClipboardItemManualOrder = (
+  id: string,
+  position: number,
+) => {
+  return call<number>(
+    TAURI_COMMAND.MOVE_CLIPBOARD_ITEM_MANUAL_ORDER,
+    "commands:labels.updateClipboardItem",
+    { id, position },
+  );
+};
+
+/**
+ * 移动右侧置顶面板条目；后端会把位置限制在合法范围。
+ */
+export const movePinnedClipboardItemOrder = (
+  id: string,
+  position: number,
+) => {
+  return call<number>(
+    TAURI_COMMAND.MOVE_PINNED_CLIPBOARD_ITEM_ORDER,
+    "commands:labels.updateClipboardItem",
+    { id, position },
+  );
 };
 
 /**

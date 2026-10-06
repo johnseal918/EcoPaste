@@ -1,0 +1,28 @@
+{
+  "assignee": "johnseal918",
+  "base_branch": "master",
+  "branch": "feat/clipboard-ranked-pinned-panel",
+  "children": [],
+  "commit": null,
+  "completedAt": null,
+  "createdAt": "2026-10-06",
+  "creator": "johnseal918",
+  "description": "Compact clipboard cards, add manual ranking for history items, and move pinned items into a fixed right-side companion panel.",
+  "dev_type": null,
+  "id": "clipboard-ranked-pinned-panel",
+  "meta": {
+    "user_approved_in_chat": true
+  },
+  "name": "clipboard-ranked-pinned-panel",
+  "notes": "Requirements and interaction model were reviewed and explicitly approved in chat before implementation.",
+  "package": null,
+  "parent": null,
+  "pr_url": null,
+  "priority": "P1",
+  "relatedFiles": [],
+  "scope": "clipboard UI + item ordering persistence + pinned companion window",
+  "status": "in_progress",
+  "subtasks": [],
+  "title": "Clipboard compact cards, ranking, and pinned panel",
+  "worktree_path": null
+}

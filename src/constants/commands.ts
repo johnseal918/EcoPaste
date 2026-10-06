@@ -43,6 +43,7 @@ export const TAURI_COMMAND = {
   LIST_ALL_APPS: "list_all_apps",
   LIST_CLIPBOARD_GROUPS: "list_clipboard_groups",
   LIST_CLIPBOARD_ITEMS: "list_clipboard_items",
+  ADD_CLIPBOARD_ITEM_TO_MANUAL_ORDER: "add_clipboard_item_to_manual_order",
   NOTIFY_WINDOW_READY: "notify_window_ready",
   OPEN_CLIPBOARD_ITEM_LINK: "open_clipboard_item_link",
   OPEN_EXTERNAL_URL: "open_external_url",
@@ -79,6 +80,10 @@ export const TAURI_COMMAND = {
   TAKE_PENDING_PREFERENCE_HIGHLIGHT: "take_pending_preference_highlight",
   TOGGLE_CLIPBOARD_ITEM_FAVORITE: "toggle_clipboard_item_favorite",
   TOGGLE_CLIPBOARD_ITEM_PINNED: "toggle_clipboard_item_pinned",
+  REMOVE_CLIPBOARD_ITEM_FROM_MANUAL_ORDER:
+    "remove_clipboard_item_from_manual_order",
+  MOVE_CLIPBOARD_ITEM_MANUAL_ORDER: "move_clipboard_item_manual_order",
+  MOVE_PINNED_CLIPBOARD_ITEM_ORDER: "move_pinned_clipboard_item_order",
   UPDATE_CLIPBOARD_GROUP: "update_clipboard_group",
   UPDATE_CLIPBOARD_GROUPS_LAYOUT: "update_clipboard_groups_layout",
   UPDATE_CLIPBOARD_ITEM_GROUP: "update_clipboard_item_group",

@@ -123,6 +123,10 @@ pub fn run() {
             commands::start_drag_clipboard_item,
             commands::toggle_clipboard_item_favorite,
             commands::toggle_clipboard_item_pinned,
+            commands::add_clipboard_item_to_manual_order,
+            commands::remove_clipboard_item_from_manual_order,
+            commands::move_clipboard_item_manual_order,
+            commands::move_pinned_clipboard_item_order,
             commands::delete_clipboard_item,
             commands::clear_clipboard_items,
             commands::update_clipboard_item_note,
@@ -270,10 +274,21 @@ pub fn run() {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
+        .on_window_event(|window_handle, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                if window::intercept_close_request(window) {
+                if window::intercept_close_request(window_handle) {
                     api.prevent_close();
+                }
+                return;
+            }
+
+            if window_handle.label() == window::CLIPBOARD_WINDOW_LABEL
+                && matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_))
+            {
+                if let Err(err) =
+                    window::sync_pinned_panel_position(window_handle.app_handle())
+                {
+                    log::warn!("sync pinned panel after clipboard geometry change failed: {err}");
                 }
             }
         })

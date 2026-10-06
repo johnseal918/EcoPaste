@@ -34,8 +34,12 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn set_clipboard_window_editing(app_handle: &AppHandle, editing: bool) -> Result<()> {
-    let window = get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?;
+pub fn set_clipboard_window_editing(
+    app_handle: &AppHandle,
+    label: &str,
+    editing: bool,
+) -> Result<()> {
+    let window = get_window(app_handle, label)?;
     let raw_hwnd = window.hwnd().map_err(|e| anyhow::anyhow!(e))?;
     let hwnd = HWND(raw_hwnd.0 as isize);
 

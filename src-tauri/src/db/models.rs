@@ -59,6 +59,10 @@ pub struct ClipboardItem {
     pub use_count: i64,
     pub is_favorite: bool,
     pub is_pinned: bool,
+    /// 非置顶条目的手动排序位置；None 表示按普通历史排序。
+    pub manual_order: Option<i64>,
+    /// 置顶面板中的独立排序位置；仅 is_pinned=true 时使用。
+    pub pin_order: Option<i64>,
     /// 命中敏感内容规则且被收录的条目；展示是否脱敏由当前设置决定。
     pub is_sensitive: bool,
     pub platform: Platform,
@@ -141,6 +145,22 @@ pub enum ClipboardAction {
     ToggleFavorite,
     /// 切换置顶（恒在；前端按 `is_pinned` 切「置顶 / 取消置顶」文案）。
     TogglePinned,
+    /// 把普通历史加入手动排序区。
+    AddToRanking,
+    /// 手动排序项移到最前。
+    MoveRankingFirst,
+    /// 手动排序项移到最后。
+    MoveRankingLast,
+    /// 手动排序项移动到指定位置。
+    MoveRankingToPosition,
+    /// 从手动排序区移除，回到普通历史。
+    RemoveFromRanking,
+    /// 置顶项在右侧面板移到最前。
+    MovePinnedFirst,
+    /// 置顶项在右侧面板移到最后。
+    MovePinnedLast,
+    /// 置顶项在右侧面板移动到指定位置。
+    MovePinnedToPosition,
     /// 编辑备注（恒在）。
     EditNote,
     /// 删除条目（恒在）。

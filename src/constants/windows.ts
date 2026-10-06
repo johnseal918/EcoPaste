@@ -6,6 +6,8 @@ export const WINDOW_LABEL = {
    * 剪贴板窗口（剪贴板历史列表）。
    */
   CLIPBOARD: "clipboard",
+  /** 独立右侧置顶面板。 */
+  PINNED_PANEL: "pinned-panel",
   /**
    * 自定义右键菜单窗口（仅 Windows，绕开 muda `TrackPopupMenu` 抢焦点的问题）。
    */

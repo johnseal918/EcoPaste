@@ -1,0 +1,39 @@
+ALTER TABLE clipboard_items ADD COLUMN manual_order INTEGER;
+ALTER TABLE clipboard_items ADD COLUMN pin_order INTEGER;
+
+WITH ranked AS (
+    SELECT id, ROW_NUMBER() OVER (ORDER BY updated_at DESC, created_at DESC, id ASC) AS position
+    FROM clipboard_items
+    WHERE is_pinned = 1
+)
+UPDATE clipboard_items
+SET pin_order = (
+    SELECT position
+    FROM ranked
+    WHERE ranked.id = clipboard_items.id
+)
+WHERE is_pinned = 1;
+
+CREATE INDEX idx_clipboard_items_manual_order
+ON clipboard_items (manual_order)
+WHERE manual_order IS NOT NULL;
+
+CREATE INDEX idx_clipboard_items_pin_order
+ON clipboard_items (pin_order)
+WHERE pin_order IS NOT NULL;
+
+CREATE TRIGGER trg_clipboard_items_compact_order_after_delete
+AFTER DELETE ON clipboard_items
+BEGIN
+    UPDATE clipboard_items
+    SET manual_order = manual_order - 1
+    WHERE OLD.manual_order IS NOT NULL
+      AND is_pinned = 0
+      AND manual_order > OLD.manual_order;
+
+    UPDATE clipboard_items
+    SET pin_order = pin_order - 1
+    WHERE OLD.pin_order IS NOT NULL
+      AND is_pinned = 1
+      AND pin_order > OLD.pin_order;
+END;
