@@ -112,5 +112,13 @@
     "rtf": "RTF",
     "text": "文本",
     "url": "链接"
+  },
+  "ordering": {
+    "moveToPosition": "移动到指定位置",
+    "positionPlaceholder": "输入排序位置，例如 3",
+    "confirm": "移动",
+    "cancel": "取消",
+    "pinnedTitle": "置顶",
+    "pinnedEmpty": "暂无置顶内容"
   }
 }
