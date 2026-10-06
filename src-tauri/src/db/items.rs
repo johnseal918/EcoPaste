@@ -10,7 +10,7 @@ use crate::db::models::{
 
 const SELECT_ITEM: &str = "SELECT id, kind, sub_kind, group_id, source_app_id, content, \
      content_hash, search_text, summary, file_types, size, width, height, use_count, is_favorite, is_pinned, \
-     is_sensitive, platform, note, created_at, updated_at FROM clipboard_items";
+     manual_order, pin_order, is_sensitive, platform, note, created_at, updated_at FROM clipboard_items";
 
 /// 列表/单条刷新场景的精简 SELECT：text 类型条目的 `content` 与 `search_text` 一律置空，
 /// 由前端用 `summary` 渲染。HTML/RTF/长纯文本可能很大（用户复制整段文档），
@@ -27,6 +27,7 @@ const LIST_SELECT_ITEM: &str = "SELECT clipboard_items.id, clipboard_items.kind,
      clipboard_items.summary, clipboard_items.file_types, clipboard_items.size, \
      clipboard_items.width, clipboard_items.height, clipboard_items.use_count, \
      clipboard_items.is_favorite, clipboard_items.is_pinned, \
+     clipboard_items.manual_order, clipboard_items.pin_order, \
      clipboard_items.is_sensitive, \
      clipboard_items.platform, clipboard_items.note, \
      clipboard_items.created_at, clipboard_items.updated_at, \
@@ -105,9 +106,9 @@ pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> 
     sqlx::query(
         "INSERT INTO clipboard_items \
          (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-          summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
-          created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          summary, file_types, size, width, height, use_count, is_favorite, is_pinned, manual_order, pin_order, \
+          is_sensitive, platform, note, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(item.id.as_str())
     .bind(item.kind)
@@ -125,6 +126,8 @@ pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> 
     .bind(item.use_count)
     .bind(item.is_favorite)
     .bind(item.is_pinned)
+    .bind(item.manual_order)
+    .bind(item.pin_order)
     .bind(item.is_sensitive)
     .bind(item.platform)
     .bind(item.note.as_deref())
@@ -212,16 +215,251 @@ pub async fn mark_item_favorite(pool: &SqlitePool, id: &str) -> Result<()> {
     Ok(())
 }
 
-/// 翻转 `is_pinned`（置顶 / 取消置顶），返回翻转后的新状态。
+/// 翻转置顶状态，并维护右侧置顶面板的连续顺序。
+///
+/// 置顶时会清除主列表手动排序；取消置顶后回到普通历史，不自动恢复旧排序。
+/// 这些都是元数据变更，不刷新 `updated_at`。
 pub async fn toggle_item_pinned(pool: &SqlitePool, id: &str) -> Result<bool> {
-    let new_value: bool = sqlx::query_scalar(
-        "UPDATE clipboard_items SET is_pinned = NOT is_pinned WHERE id = ? RETURNING is_pinned",
+    let mut tx = pool.begin().await.context("failed to begin pin transaction")?;
+    let (is_pinned, manual_order, pin_order): (bool, Option<i64>, Option<i64>) =
+        sqlx::query_as(
+            "SELECT is_pinned, manual_order, pin_order FROM clipboard_items WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await
+        .context("failed to read clipboard item pin state")?;
+
+    if is_pinned {
+        sqlx::query(
+            "UPDATE clipboard_items SET is_pinned = 0, pin_order = NULL WHERE id = ?",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to unpin clipboard item")?;
+
+        if let Some(current) = pin_order {
+            sqlx::query(
+                "UPDATE clipboard_items SET pin_order = pin_order - 1 \
+                 WHERE is_pinned = 1 AND pin_order > ?",
+            )
+            .bind(current)
+            .execute(&mut *tx)
+            .await
+            .context("failed to compact pinned item order")?;
+        }
+
+        tx.commit().await.context("failed to commit unpin transaction")?;
+        return Ok(false);
+    }
+
+    let next_pin_order: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(pin_order), 0) + 1 FROM clipboard_items WHERE is_pinned = 1",
     )
-    .bind(id)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
-    .context("failed to toggle clipboard item pinned")?;
-    Ok(new_value)
+    .context("failed to allocate pinned item order")?;
+
+    sqlx::query(
+        "UPDATE clipboard_items \
+         SET is_pinned = 1, pin_order = ?, manual_order = NULL \
+         WHERE id = ?",
+    )
+    .bind(next_pin_order)
+    .bind(id)
+    .execute(&mut *tx)
+    .await
+    .context("failed to pin clipboard item")?;
+
+    if let Some(current) = manual_order {
+        sqlx::query(
+            "UPDATE clipboard_items SET manual_order = manual_order - 1 \
+             WHERE is_pinned = 0 AND manual_order > ?",
+        )
+        .bind(current)
+        .execute(&mut *tx)
+        .await
+        .context("failed to compact manual item order after pin")?;
+    }
+
+    tx.commit().await.context("failed to commit pin transaction")?;
+    Ok(true)
+}
+
+/// 将非置顶条目加入主列表手动排序，默认追加到排序区末尾。
+pub async fn add_item_to_manual_order(pool: &SqlitePool, id: &str) -> Result<i64> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin manual order transaction")?;
+    let (is_pinned, current): (bool, Option<i64>) =
+        sqlx::query_as("SELECT is_pinned, manual_order FROM clipboard_items WHERE id = ?")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await
+            .context("failed to read clipboard item manual order")?;
+
+    if is_pinned {
+        return Err(anyhow::anyhow!("pinned item cannot join main ranking").into());
+    }
+    if let Some(current) = current {
+        return Ok(current);
+    }
+
+    let next: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(manual_order), 0) + 1 \
+         FROM clipboard_items WHERE is_pinned = 0 AND manual_order IS NOT NULL",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .context("failed to allocate manual order")?;
+
+    sqlx::query("UPDATE clipboard_items SET manual_order = ? WHERE id = ?")
+        .bind(next)
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to add clipboard item to manual order")?;
+
+    tx.commit()
+        .await
+        .context("failed to commit manual order transaction")?;
+    Ok(next)
+}
+
+/// 从主列表手动排序中移除条目，并压紧后续序号。
+pub async fn remove_item_from_manual_order(pool: &SqlitePool, id: &str) -> Result<()> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin manual order removal")?;
+    let current: Option<i64> =
+        sqlx::query_scalar("SELECT manual_order FROM clipboard_items WHERE id = ?")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await
+            .context("failed to read clipboard item manual order")?;
+
+    let Some(current) = current else {
+        tx.commit()
+            .await
+            .context("failed to commit no-op manual order removal")?;
+        return Ok(());
+    };
+
+    sqlx::query("UPDATE clipboard_items SET manual_order = NULL WHERE id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to remove clipboard item from manual order")?;
+    sqlx::query(
+        "UPDATE clipboard_items SET manual_order = manual_order - 1 \
+         WHERE is_pinned = 0 AND manual_order > ?",
+    )
+    .bind(current)
+    .execute(&mut *tx)
+    .await
+    .context("failed to compact manual order")?;
+
+    tx.commit()
+        .await
+        .context("failed to commit manual order removal")?;
+    Ok(())
+}
+
+/// 把已排序的主列表条目移动到指定位置。位置自动限制在 1..N。
+pub async fn move_item_manual_order(
+    pool: &SqlitePool,
+    id: &str,
+    requested_position: i64,
+) -> Result<i64> {
+    move_item_order(pool, id, requested_position, false).await
+}
+
+/// 把置顶条目移动到右侧置顶面板的指定位置。位置自动限制在 1..N。
+pub async fn move_pinned_item_order(
+    pool: &SqlitePool,
+    id: &str,
+    requested_position: i64,
+) -> Result<i64> {
+    move_item_order(pool, id, requested_position, true).await
+}
+
+async fn move_item_order(
+    pool: &SqlitePool,
+    id: &str,
+    requested_position: i64,
+    pinned: bool,
+) -> Result<i64> {
+    let mut tx = pool.begin().await.context("failed to begin reorder transaction")?;
+    let (column, predicate) = if pinned {
+        ("pin_order", "is_pinned = 1")
+    } else {
+        ("manual_order", "is_pinned = 0")
+    };
+
+    let current_sql = format!(
+        "SELECT {column} FROM clipboard_items WHERE id = ? AND {predicate}"
+    );
+    let current: Option<i64> = sqlx::query_scalar(&current_sql)
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await
+        .context("failed to read clipboard item order")?;
+    let current = current.ok_or_else(|| anyhow::anyhow!("clipboard item is not in this order list"))?;
+
+    let count_sql =
+        format!("SELECT COUNT(*) FROM clipboard_items WHERE {predicate} AND {column} IS NOT NULL");
+    let count: i64 = sqlx::query_scalar(&count_sql)
+        .fetch_one(&mut *tx)
+        .await
+        .context("failed to count ordered clipboard items")?;
+    let target = requested_position.clamp(1, count.max(1));
+
+    if target == current {
+        tx.commit()
+            .await
+            .context("failed to commit no-op reorder transaction")?;
+        return Ok(target);
+    }
+
+    if target < current {
+        let shift_sql = format!(
+            "UPDATE clipboard_items SET {column} = {column} + 1 \
+             WHERE {predicate} AND {column} >= ? AND {column} < ?"
+        );
+        sqlx::query(&shift_sql)
+            .bind(target)
+            .bind(current)
+            .execute(&mut *tx)
+            .await
+            .context("failed to shift ordered clipboard items down")?;
+    } else {
+        let shift_sql = format!(
+            "UPDATE clipboard_items SET {column} = {column} - 1 \
+             WHERE {predicate} AND {column} > ? AND {column} <= ?"
+        );
+        sqlx::query(&shift_sql)
+            .bind(current)
+            .bind(target)
+            .execute(&mut *tx)
+            .await
+            .context("failed to shift ordered clipboard items up")?;
+    }
+
+    let update_sql = format!("UPDATE clipboard_items SET {column} = ? WHERE id = ?");
+    sqlx::query(&update_sql)
+        .bind(target)
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to move clipboard item")?;
+
+    tx.commit()
+        .await
+        .context("failed to commit reorder transaction")?;
+    Ok(target)
 }
 
 /// 更新备注，传 `None` 清空备注。
@@ -465,16 +703,31 @@ async fn fetch_items(
     qb.push(" WHERE 1 = 1");
     push_filter_clauses(&mut qb, q, &keyword);
 
-    qb.push(" ORDER BY clipboard_items.is_pinned DESC, ");
-    match q.sort {
-        ClipboardItemSort::CreatedAt => {
-            qb.push("clipboard_items.created_at DESC");
+    match q.pinned {
+        Some(true) => {
+            qb.push(
+                " ORDER BY CASE WHEN clipboard_items.pin_order IS NULL THEN 1 ELSE 0 END, \
+                 clipboard_items.pin_order ASC, ",
+            );
+            push_normal_sort(&mut qb, q.sort);
         }
-        ClipboardItemSort::UpdatedAt => {
-            qb.push("clipboard_items.updated_at DESC, clipboard_items.created_at DESC");
+        Some(false) => {
+            qb.push(
+                " ORDER BY CASE WHEN clipboard_items.manual_order IS NULL THEN 1 ELSE 0 END, \
+                 clipboard_items.manual_order ASC, ",
+            );
+            push_normal_sort(&mut qb, q.sort);
         }
-        ClipboardItemSort::UseCount => {
-            qb.push("clipboard_items.use_count DESC, clipboard_items.created_at DESC");
+        None => {
+            // 保留通用查询兼容性：未声明 surface 时仍先展示置顶，再展示手动排序。
+            qb.push(
+                " ORDER BY clipboard_items.is_pinned DESC, \
+                 CASE WHEN clipboard_items.is_pinned = 1 AND clipboard_items.pin_order IS NULL THEN 1 ELSE 0 END, \
+                 clipboard_items.pin_order ASC, \
+                 CASE WHEN clipboard_items.is_pinned = 0 AND clipboard_items.manual_order IS NULL THEN 1 ELSE 0 END, \
+                 clipboard_items.manual_order ASC, ",
+            );
+            push_normal_sort(&mut qb, q.sort);
         }
     }
 
@@ -487,6 +740,22 @@ async fn fetch_items(
         .await
         .context("failed to query clipboard items")?;
     Ok(items)
+}
+
+
+/// 追加普通历史的用户选定排序规则。
+fn push_normal_sort(qb: &mut QueryBuilder<Sqlite>, sort: ClipboardItemSort) {
+    match sort {
+        ClipboardItemSort::CreatedAt => {
+            qb.push("clipboard_items.created_at DESC");
+        }
+        ClipboardItemSort::UpdatedAt => {
+            qb.push("clipboard_items.updated_at DESC, clipboard_items.created_at DESC");
+        }
+        ClipboardItemSort::UseCount => {
+            qb.push("clipboard_items.use_count DESC, clipboard_items.created_at DESC");
+        }
+    }
 }
 
 /// 统计满足同样过滤条件的总条数（不参与排序 / 分页），与 [`fetch_items`] 共用 [`push_filter_clauses`]。
@@ -587,6 +856,8 @@ mod tests {
             use_count: 1,
             is_favorite: false,
             is_pinned: false,
+            manual_order: None,
+            pin_order: None,
             is_sensitive: false,
             platform: Platform::Macos,
             note: None,
