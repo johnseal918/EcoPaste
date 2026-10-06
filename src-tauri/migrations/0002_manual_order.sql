@@ -10,7 +10,7 @@ SET pin_order = (
     FROM clipboard_items AS earlier
     WHERE earlier.is_pinned = 1
       AND (
-        earlier.created_at < clipboard_items.created_at
+        earlier.created_at > clipboard_items.created_at
         OR (earlier.created_at = clipboard_items.created_at AND earlier.id <= clipboard_items.id)
       )
 )
