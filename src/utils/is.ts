@@ -21,7 +21,13 @@ export const isDev = import.meta.env.DEV;
  * 当前是否为 Windows 平台的剪贴板窗口（focusable=false，需要低级键盘钩子）。
  */
 export const isWinClipboardWindow = () => {
-  return isWin && getCurrentWebviewWindow().label === WINDOW_LABEL.CLIPBOARD;
+  const label = getCurrentWebviewWindow().label;
+
+  return (
+    isWin &&
+    (label === WINDOW_LABEL.CLIPBOARD ||
+      label === WINDOW_LABEL.CLIPBOARD_PINNED)
+  );
 };
 
 /**
