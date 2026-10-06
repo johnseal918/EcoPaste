@@ -183,6 +183,7 @@ pub struct PopupClipboardItemMenuInput {
     pub is_favorite: bool,
     pub is_pinned: bool,
     pub has_note: bool,
+    pub target_window_label: String,
 }
 
 /// 构建右键菜单所需的完整上下文，包含命令参数与实时读取的分组列表。
@@ -195,6 +196,7 @@ pub(super) struct ClipboardItemMenuRequest {
     pub is_favorite: bool,
     pub is_pinned: bool,
     pub has_note: bool,
+    pub target_window_label: String,
 }
 
 /// 菜单点击后 emit 给前端的 payload。Windows 自定义菜单窗也复用这个结构发回
@@ -225,7 +227,6 @@ mod native {
 
     use crate::core::{AppError, Result};
     use crate::settings::Language;
-    use crate::window::CLIPBOARD_WINDOW_LABEL;
 
     use super::{
         ClipboardItemMenuRequest, ClipboardMenuAction, ClipboardMenuGroup, MenuActionPayload,
@@ -295,6 +296,7 @@ mod native {
     pub(super) struct ClipboardItemMenuState {
         current: Mutex<Option<Menu<Wry>>>,
         target_item_id: Mutex<Option<String>>,
+        target_window_label: Mutex<Option<String>>,
     }
 
     pub(super) fn init(app: &AppHandle) {
@@ -309,10 +311,12 @@ mod native {
             AppError::Other(anyhow::anyhow!("ClipboardItemMenuState not managed"))
         })?;
         *state.target_item_id.lock().unwrap() = Some(request.item_id.clone());
+        *state.target_window_label.lock().unwrap() =
+            Some(request.target_window_label.clone());
 
         let window = app
-            .get_webview_window(CLIPBOARD_WINDOW_LABEL)
-            .ok_or_else(|| AppError::Other(anyhow::anyhow!("clipboard window missing")))?;
+            .get_webview_window(&request.target_window_label)
+            .ok_or_else(|| AppError::Other(anyhow::anyhow!("clipboard menu owner window missing")))?;
 
         let app_for_main = app.clone();
         let window_for_main = window.clone();
