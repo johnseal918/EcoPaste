@@ -147,6 +147,11 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
               {item.priorityOrder}
             </span>
           ) : null}
+          {item.isPinned && item.pinOrder !== null ? (
+            <span className="inline-flex min-w-5 items-center justify-center rounded-1 bg-ant-primary-bg px-1 font-medium text-ant-primary">
+              {item.pinOrder}
+            </span>
+          ) : null}
           {hintKey ? (
             <KeyHint hintKey={hintKey} onKeyPress={onQuickPaste}>
               <span className="size-4" />
