@@ -255,9 +255,10 @@ fn apply_clipboard_window_layout(app_handle: &AppHandle) -> Result<()> {
     position::position_window(&window, position)
 }
 
-/// 置顶面板使用固定逻辑宽度，始终紧贴在主剪贴板窗口右侧。
-/// 主窗口移动时只同步位置，不允许沿用/放大置顶窗口当前宽度；
-/// 右侧空间不足时整体向左平移，但绝不把置顶面板换到主窗口左侧。
+/// 置顶面板使用固定逻辑宽度，并按两个 WebView 的“可见内区”而不是外窗阴影边界对齐。
+/// Windows 无边框透明窗仍可能有 DWM 不可见边距：若按 outer_size/outer_position 拼接，
+/// 会留下中间灰缝，且把主窗 outer height 当作右窗 inner height 时会导致右窗越同步越高。
+/// 这里显式补偿 inner/outer inset：内容边缘零间隙、顶部/底部严格对齐。
 pub fn sync_pinned_panel_layout(app_handle: &AppHandle) -> Result<()> {
     use tauri::{PhysicalPosition, PhysicalSize};
 
@@ -265,49 +266,65 @@ pub fn sync_pinned_panel_layout(app_handle: &AppHandle) -> Result<()> {
 
     let main = get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?;
     let pinned = get_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL)?;
-    let main_position = main.outer_position().map_err(|err| anyhow::anyhow!(err))?;
-    let main_size = main.outer_size().map_err(|err| anyhow::anyhow!(err))?;
+
+    let main_outer_position = main.outer_position().map_err(|err| anyhow::anyhow!(err))?;
+    let main_inner_position = main.inner_position().map_err(|err| anyhow::anyhow!(err))?;
+    let main_inner_size = main.inner_size().map_err(|err| anyhow::anyhow!(err))?;
+    let main_inset_x = main_inner_position.x - main_outer_position.x;
+
     let scale = main.scale_factor().map_err(|err| anyhow::anyhow!(err))?;
     let pinned_width = (PINNED_PANEL_WIDTH_LOGICAL * scale).round().max(1.0) as u32;
+
+    // set_size 接收的是窗口内区尺寸，因此高度必须跟 main.inner_size 对齐，
+    // 不能再把 main.outer_size.height 塞进来。
+    pinned
+        .set_size(PhysicalSize::new(pinned_width, main_inner_size.height))
+        .map_err(|err| anyhow::anyhow!(err))?;
+
+    // 读取右窗自身的 DWM 内外边距，用它把“可见内容左上角”对齐到主窗内容右上角。
+    let pinned_outer_position = pinned.outer_position().map_err(|err| anyhow::anyhow!(err))?;
+    let pinned_inner_position = pinned.inner_position().map_err(|err| anyhow::anyhow!(err))?;
+    let pinned_inset_x = pinned_inner_position.x - pinned_outer_position.x;
+    let pinned_inset_y = pinned_inner_position.y - pinned_outer_position.y;
 
     let monitor = main
         .current_monitor()
         .map_err(|err| anyhow::anyhow!(err))?
         .or_else(|| main.primary_monitor().ok().flatten());
-    let Some(monitor) = monitor else {
-        pinned
-            .set_size(PhysicalSize::new(pinned_width, main_size.height))
-            .map_err(|err| anyhow::anyhow!(err))?;
-        pinned
-            .set_position(PhysicalPosition::new(
-                main_position.x + main_size.width as i32,
-                main_position.y,
-            ))
-            .map_err(|err| anyhow::anyhow!(err))?;
-        return Ok(());
+
+    let preferred_main_inner_x = main_inner_position.x;
+    let main_inner_y = main_inner_position.y;
+    let pair_inner_width = main_inner_size.width as i32 + pinned_width as i32;
+
+    let main_inner_x = if let Some(monitor) = monitor {
+        let monitor_position = monitor.position();
+        let monitor_size = monitor.size();
+        let monitor_left = monitor_position.x;
+        let monitor_right = monitor_left + monitor_size.width as i32;
+
+        preferred_main_inner_x
+            .min(monitor_right - pair_inner_width)
+            .max(monitor_left)
+    } else {
+        preferred_main_inner_x
     };
 
-    let monitor_position = monitor.position();
-    let monitor_size = monitor.size();
-    let monitor_left = monitor_position.x;
-    let monitor_right = monitor_left + monitor_size.width as i32;
-    let pair_width = main_size.width as i32 + pinned_width as i32;
-    let preferred_left = main_position.x;
-    let main_x = preferred_left
-        .min(monitor_right - pair_width)
-        .max(monitor_left);
-    let pinned_x = main_x + main_size.width as i32;
-
-    if main_x != main_position.x {
-        main.set_position(PhysicalPosition::new(main_x, main_position.y))
-            .map_err(|err| anyhow::anyhow!(err))?;
+    // 主窗只在横向需要让位时平移；保持其当前可见顶部不变。
+    let main_outer_x = main_inner_x - main_inset_x;
+    if main_outer_x != main_outer_position.x {
+        main.set_position(PhysicalPosition::new(
+            main_outer_x,
+            main_outer_position.y,
+        ))
+        .map_err(|err| anyhow::anyhow!(err))?;
     }
 
+    // 右窗的可见内区左边缘 = 主窗可见内区右边缘；可见顶部完全一致。
+    let pinned_outer_x =
+        main_inner_x + main_inner_size.width as i32 - pinned_inset_x;
+    let pinned_outer_y = main_inner_y - pinned_inset_y;
     pinned
-        .set_size(PhysicalSize::new(pinned_width, main_size.height))
-        .map_err(|err| anyhow::anyhow!(err))?;
-    pinned
-        .set_position(PhysicalPosition::new(pinned_x, main_position.y))
+        .set_position(PhysicalPosition::new(pinned_outer_x, pinned_outer_y))
         .map_err(|err| anyhow::anyhow!(err))?;
 
     Ok(())
