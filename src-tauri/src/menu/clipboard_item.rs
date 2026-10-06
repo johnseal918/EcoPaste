@@ -190,6 +190,7 @@ pub struct PopupClipboardItemMenuInput {
 #[derive(Debug, Clone)]
 pub(super) struct ClipboardItemMenuRequest {
     pub item_id: String,
+    pub target_window_label: String,
     pub available_actions: Vec<ClipboardMenuAction>,
     pub groups: Vec<ClipboardMenuGroup>,
     pub current_group_id: Option<String>,
@@ -226,7 +227,6 @@ mod native {
 
     use crate::core::{AppError, Result};
     use crate::settings::Language;
-    use crate::window::CLIPBOARD_WINDOW_LABEL;
 
     use super::{
         ClipboardItemMenuRequest, ClipboardMenuAction, ClipboardMenuGroup, MenuActionPayload,
@@ -312,6 +312,7 @@ mod native {
     pub(super) struct ClipboardItemMenuState {
         current: Mutex<Option<Menu<Wry>>>,
         target_item_id: Mutex<Option<String>>,
+        target_window_label: Mutex<Option<String>>,
     }
 
     pub(super) fn init(app: &AppHandle) {
@@ -326,9 +327,10 @@ mod native {
             AppError::Other(anyhow::anyhow!("ClipboardItemMenuState not managed"))
         })?;
         *state.target_item_id.lock().unwrap() = Some(request.item_id.clone());
+        *state.target_window_label.lock().unwrap() = Some(request.target_window_label.clone());
 
         let window = app
-            .get_webview_window(CLIPBOARD_WINDOW_LABEL)
+            .get_webview_window(&request.target_window_label)
             .ok_or_else(|| AppError::Other(anyhow::anyhow!("clipboard window missing")))?;
 
         let app_for_main = app.clone();
@@ -510,11 +512,16 @@ mod native {
             item_id,
             group_id: group_id_from_menu_id(menu_id),
         };
-        let Some(main) = app.get_webview_window(CLIPBOARD_WINDOW_LABEL) else {
-            log::warn!("clipboard window missing on clipboard menu dispatch");
+        let target_label = state.target_window_label.lock().unwrap().clone();
+        let Some(target_label) = target_label else {
+            log::warn!("no target window recorded for clipboard menu action");
             return;
         };
-        if let Err(err) = main.emit(CLIPBOARD_MENU_ACTION_EVENT, payload) {
+        let Some(target) = app.get_webview_window(&target_label) else {
+            log::warn!("target window missing on clipboard menu dispatch: {target_label}");
+            return;
+        };
+        if let Err(err) = target.emit(CLIPBOARD_MENU_ACTION_EVENT, payload) {
             log::warn!("emit {CLIPBOARD_MENU_ACTION_EVENT} failed: {err}");
         }
     }
@@ -537,6 +544,7 @@ pub fn init(app: &AppHandle) {
 #[tauri::command]
 pub async fn popup_clipboard_item_menu(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     db: State<'_, DatabaseState>,
     input: PopupClipboardItemMenuInput,
 ) -> Result<()> {
@@ -552,6 +560,7 @@ pub async fn popup_clipboard_item_menu(
         .collect::<Vec<_>>();
     let request = ClipboardItemMenuRequest {
         item_id: input.item_id,
+        target_window_label: window.label().to_owned(),
         available_actions: input.available_actions,
         groups,
         current_group_id: input.current_group_id,
