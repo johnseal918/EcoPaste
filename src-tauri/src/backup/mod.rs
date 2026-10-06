@@ -1055,6 +1055,7 @@ async fn merge_history(current: &SqlitePool, backup: &SqlitePool) -> Result<Merg
     merge_file_type_icons(&mut tx, backup).await?;
     let outcome = merge_items(&mut tx, backup).await?;
     tx.commit().await.context("failed to commit import")?;
+    crate::db::items::normalize_item_orders(current).await?;
 
     Ok(outcome)
 }
@@ -1169,17 +1170,44 @@ async fn merge_items(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     backup: &SqlitePool,
 ) -> Result<MergeOutcome> {
-    let rows = sqlx::query_as::<_, BackupItemRow>(
+    let has_priority_order = backup_has_column(backup, "priority_order").await?;
+    let has_pin_order = backup_has_column(backup, "pin_order").await?;
+    let priority_expr = if has_priority_order {
+        "priority_order"
+    } else {
+        "NULL AS priority_order"
+    };
+    let pin_expr = if has_pin_order {
+        "pin_order"
+    } else {
+        "NULL AS pin_order"
+    };
+    let select = format!(
         "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-         summary, file_types, size, width, height, use_count, is_favorite, is_pinned, priority_order, pin_order, is_sensitive, platform, note, \
-         created_at, updated_at FROM clipboard_items ORDER BY created_at ASC",
-    )
-    .fetch_all(backup)
-    .await
-    .context("failed to read backup items")?;
+         summary, file_types, size, width, height, use_count, is_favorite, is_pinned, {priority_expr}, {pin_expr}, is_sensitive, platform, note, \
+         created_at, updated_at FROM clipboard_items ORDER BY created_at ASC"
+    );
+    let rows = sqlx::query_as::<_, BackupItemRow>(&select)
+        .fetch_all(backup)
+        .await
+        .context("failed to read backup items")?;
 
     let mut imported_items = 0;
     let mut skipped_items = 0;
+    let priority_offset: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(priority_order), 0) FROM clipboard_items WHERE is_pinned = 0",
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .context("failed to read current priority order maximum")?;
+    let pin_offset: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(pin_order), 0) FROM clipboard_items WHERE is_pinned = 1",
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .context("failed to read current pin order maximum")?;
+    let mut legacy_pin_sequence = 0_i64;
+
     for row in rows {
         let exists: Option<i64> = sqlx::query_scalar(
             "SELECT 1 FROM clipboard_items WHERE kind = ? AND content_hash = ? LIMIT 1",
@@ -1193,6 +1221,14 @@ async fn merge_items(
             skipped_items += 1;
             continue;
         }
+
+        let imported_priority_order = row.priority_order.map(|order| priority_offset + order);
+        let imported_pin_order = if row.is_pinned {
+            legacy_pin_sequence += 1;
+            Some(pin_offset + row.pin_order.unwrap_or(legacy_pin_sequence))
+        } else {
+            None
+        };
 
         sqlx::query(
             "INSERT OR IGNORE INTO clipboard_items \
@@ -1217,8 +1253,8 @@ async fn merge_items(
         .bind(row.use_count)
         .bind(row.is_favorite)
         .bind(row.is_pinned)
-        .bind(row.priority_order)
-        .bind(row.pin_order)
+        .bind(imported_priority_order)
+        .bind(imported_pin_order)
         .bind(row.is_sensitive)
         .bind(row.platform)
         .bind(row.note)
@@ -1261,6 +1297,14 @@ struct BackupItemRow {
     note: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+}
+
+async fn backup_has_column(pool: &SqlitePool, column: &str) -> Result<bool> {
+    let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('clipboard_items')")
+        .fetch_all(pool)
+        .await
+        .context("failed to inspect backup clipboard_items schema")?;
+    Ok(columns.iter().any(|name| name == column))
 }
 
 struct WatcherPauseRestore {
