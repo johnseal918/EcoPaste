@@ -774,6 +774,20 @@ fn compute_available_actions(item: &ClipboardItem) -> Vec<ClipboardAction> {
 
     actions.push(ClipboardAction::ToggleFavorite);
     actions.push(ClipboardAction::TogglePinned);
+
+    if item.is_pinned {
+        actions.push(ClipboardAction::MovePinnedFirst);
+        actions.push(ClipboardAction::MovePinnedLast);
+        actions.push(ClipboardAction::MovePinnedToPosition);
+    } else if item.manual_order.is_some() {
+        actions.push(ClipboardAction::MoveRankingFirst);
+        actions.push(ClipboardAction::MoveRankingLast);
+        actions.push(ClipboardAction::MoveRankingToPosition);
+        actions.push(ClipboardAction::RemoveFromRanking);
+    } else {
+        actions.push(ClipboardAction::AddToRanking);
+    }
+
     actions.push(ClipboardAction::EditNote);
     actions.push(ClipboardAction::Delete);
 
@@ -1337,6 +1351,48 @@ pub async fn toggle_clipboard_item_pinned(
 ) -> Result<bool> {
     let pool = db.pool().await;
     crate::db::items::toggle_item_pinned(&pool, &id).await
+}
+
+/// 将普通历史加入手动排序区，默认追加到排序项末尾。
+#[tauri::command]
+pub async fn add_clipboard_item_to_manual_order(
+    db: State<'_, DatabaseState>,
+    id: String,
+) -> Result<i64> {
+    let pool = db.pool().await;
+    crate::db::items::add_item_to_manual_order(&pool, &id).await
+}
+
+/// 从普通历史手动排序区移除。
+#[tauri::command]
+pub async fn remove_clipboard_item_from_manual_order(
+    db: State<'_, DatabaseState>,
+    id: String,
+) -> Result<()> {
+    let pool = db.pool().await;
+    crate::db::items::remove_item_from_manual_order(&pool, &id).await
+}
+
+/// 把普通历史的手动排序项移动到指定位置。
+#[tauri::command]
+pub async fn move_clipboard_item_manual_order(
+    db: State<'_, DatabaseState>,
+    id: String,
+    position: i64,
+) -> Result<i64> {
+    let pool = db.pool().await;
+    crate::db::items::move_item_manual_order(&pool, &id, position).await
+}
+
+/// 把右侧置顶面板中的条目移动到指定位置。
+#[tauri::command]
+pub async fn move_pinned_clipboard_item_order(
+    db: State<'_, DatabaseState>,
+    id: String,
+    position: i64,
+) -> Result<i64> {
+    let pool = db.pool().await;
+    crate::db::items::move_pinned_item_order(&pool, &id, position).await
 }
 
 /// 删除单条记录（薄封装）。若删的是图片记录，连带删除其落盘文件（原图 + 缩略图）。
