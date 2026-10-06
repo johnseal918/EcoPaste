@@ -282,8 +282,12 @@ pub fn sync_pinned_panel_layout(app_handle: &AppHandle) -> Result<()> {
         .map_err(|err| anyhow::anyhow!(err))?;
 
     // 读取右窗自身的 DWM 内外边距，用它把“可见内容左上角”对齐到主窗内容右上角。
-    let pinned_outer_position = pinned.outer_position().map_err(|err| anyhow::anyhow!(err))?;
-    let pinned_inner_position = pinned.inner_position().map_err(|err| anyhow::anyhow!(err))?;
+    let pinned_outer_position = pinned
+        .outer_position()
+        .map_err(|err| anyhow::anyhow!(err))?;
+    let pinned_inner_position = pinned
+        .inner_position()
+        .map_err(|err| anyhow::anyhow!(err))?;
     let pinned_inset_x = pinned_inner_position.x - pinned_outer_position.x;
     let pinned_inset_y = pinned_inner_position.y - pinned_outer_position.y;
 
@@ -312,16 +316,12 @@ pub fn sync_pinned_panel_layout(app_handle: &AppHandle) -> Result<()> {
     // 主窗只在横向需要让位时平移；保持其当前可见顶部不变。
     let main_outer_x = main_inner_x - main_inset_x;
     if main_outer_x != main_outer_position.x {
-        main.set_position(PhysicalPosition::new(
-            main_outer_x,
-            main_outer_position.y,
-        ))
-        .map_err(|err| anyhow::anyhow!(err))?;
+        main.set_position(PhysicalPosition::new(main_outer_x, main_outer_position.y))
+            .map_err(|err| anyhow::anyhow!(err))?;
     }
 
     // 右窗的可见内区左边缘 = 主窗可见内区右边缘；可见顶部完全一致。
-    let pinned_outer_x =
-        main_inner_x + main_inner_size.width as i32 - pinned_inset_x;
+    let pinned_outer_x = main_inner_x + main_inner_size.width as i32 - pinned_inset_x;
     let pinned_outer_y = main_inner_y - pinned_inset_y;
     pinned
         .set_position(PhysicalPosition::new(pinned_outer_x, pinned_outer_y))
