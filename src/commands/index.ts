@@ -66,6 +66,7 @@ export interface ContextMenuItemPayload {
 
 export interface ContextMenuShowPayload {
   itemId: string;
+  targetWindowLabel: string;
   isFavorite: boolean;
   isPinned: boolean;
   groups: Array<Array<ContextMenuItemPayload>>;
