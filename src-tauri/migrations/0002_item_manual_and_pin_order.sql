@@ -21,3 +21,19 @@ WHERE manual_order IS NOT NULL;
 CREATE INDEX idx_clipboard_items_pin_order
 ON clipboard_items (pin_order)
 WHERE pin_order IS NOT NULL;
+
+CREATE TRIGGER trg_clipboard_items_compact_order_after_delete
+AFTER DELETE ON clipboard_items
+BEGIN
+    UPDATE clipboard_items
+    SET manual_order = manual_order - 1
+    WHERE OLD.manual_order IS NOT NULL
+      AND is_pinned = 0
+      AND manual_order > OLD.manual_order;
+
+    UPDATE clipboard_items
+    SET pin_order = pin_order - 1
+    WHERE OLD.pin_order IS NOT NULL
+      AND is_pinned = 1
+      AND pin_order > OLD.pin_order;
+END;
