@@ -123,7 +123,7 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
         if let Err(err) = apply_clipboard_window_layout(app_handle) {
             log::warn!("apply clipboard window layout failed: {err}");
         }
-        if let Err(err) = position_pinned_panel_to_right(app_handle) {
+        if let Err(err) = sync_pinned_panel_layout(app_handle) {
             log::warn!("position pinned clipboard panel failed: {err}");
         }
     } else if label == ONBOARDING_WINDOW_LABEL {
@@ -252,7 +252,7 @@ fn apply_clipboard_window_layout(app_handle: &AppHandle) -> Result<()> {
 
 /// 将置顶面板固定在主剪贴板窗口右侧。右侧空间不足时整体向左平移，
 /// 但绝不把置顶面板换到主窗口左侧。
-fn position_pinned_panel_to_right(app_handle: &AppHandle) -> Result<()> {
+pub fn sync_pinned_panel_layout(app_handle: &AppHandle) -> Result<()> {
     use tauri::{PhysicalPosition, PhysicalSize};
 
     let main = get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?;
