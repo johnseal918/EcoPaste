@@ -1300,10 +1300,11 @@ struct BackupItemRow {
 }
 
 async fn backup_has_column(pool: &SqlitePool, column: &str) -> Result<bool> {
-    let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('clipboard_items')")
-        .fetch_all(pool)
-        .await
-        .context("failed to inspect backup clipboard_items schema")?;
+    let columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('clipboard_items')")
+            .fetch_all(pool)
+            .await
+            .context("failed to inspect backup clipboard_items schema")?;
     Ok(columns.iter().any(|name| name == column))
 }
 
