@@ -6,7 +6,7 @@ use tauri::AppHandle;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsWindow, SetForegroundWindow};
 
-use super::{get_window, CLIPBOARD_WINDOW_LABEL};
+use super::{get_window, CLIPBOARD_PINNED_WINDOW_LABEL, CLIPBOARD_WINDOW_LABEL};
 use crate::core::Result;
 use crate::{keyboard, mouse};
 
@@ -14,11 +14,13 @@ static PRE_EDIT_FOREGROUND_HWND: Mutex<Option<isize>> = Mutex::new(None);
 
 pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
     let window = get_window(app_handle, label)?;
-    if label == CLIPBOARD_WINDOW_LABEL {
+    if label == CLIPBOARD_WINDOW_LABEL || label == CLIPBOARD_PINNED_WINDOW_LABEL {
         window
             .set_focusable(false)
             .map_err(|e| anyhow::anyhow!(e))?;
-        clear_pre_edit_foreground();
+        if label == CLIPBOARD_WINDOW_LABEL {
+            clear_pre_edit_foreground();
+        }
     }
 
     window.show().map_err(|e| anyhow::anyhow!(e))?;
@@ -27,7 +29,7 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
     if label == CLIPBOARD_WINDOW_LABEL {
         keyboard::enable_navigation_keys(app_handle);
         mouse::enable_outside_click_hide(app_handle);
-    } else {
+    } else if label != CLIPBOARD_PINNED_WINDOW_LABEL {
         window.set_focus().map_err(|e| anyhow::anyhow!(e))?;
     }
 
