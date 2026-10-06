@@ -4,7 +4,6 @@
  * 不要再裸写命令名字面量或在调用处引用这个表。
  */
 export const TAURI_COMMAND = {
-    "set_clipboard_window_auto_hide_suspended",
   ACQUIRE_WINDOW_KEEPALIVE: "acquire_window_keepalive",
   ADD_CLIPBOARD_APP_FROM_PATH: "add_clipboard_app_from_path",
   ADD_CLIPBOARD_ITEM_PRIORITY: "add_clipboard_item_priority",
@@ -67,6 +66,7 @@ export const TAURI_COMMAND = {
   SAVE_CLIPBOARD_IMAGE_TO_FILE: "save_clipboard_image_to_file",
   SET_AUTOSTART: "set_autostart",
   SET_CLIPBOARD_WINDOW_AUTO_HIDE_SUSPENDED:
+    "set_clipboard_window_auto_hide_suspended",
   SET_CLIPBOARD_WINDOW_EDITING: "set_clipboard_window_editing",
   SET_CLIPBOARD_WINDOW_PINNED: "set_clipboard_window_pinned",
   SET_ONBOARDING_STEP: "set_onboarding_step",
