@@ -52,6 +52,10 @@ export interface ClipboardItem {
   useCount: number;
   isFavorite: boolean;
   isPinned: boolean;
+  /** 非置顶历史的手动排序位置；null 表示普通历史。 */
+  manualOrder: number | null;
+  /** 右侧置顶面板中的独立排序位置。 */
+  pinOrder: number | null;
   isSensitive: boolean;
   platform: ClipboardPlatform;
   note: string | null;
