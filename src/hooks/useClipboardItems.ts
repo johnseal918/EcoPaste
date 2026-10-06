@@ -390,23 +390,7 @@ function trimCache(
   const center = Math.floor((viewRange.start + viewRange.end) / 2);
   const keepStart = Math.max(0, center - CACHE_KEEP_RADIUS);
   const keepEnd = Math.min(total - 1, center + CACHE_KEEP_RADIUS);
-  const leadingPinnedEnd = getLeadingPinnedEnd(items);
-
   for (const [index] of items) {
-    if (index <= leadingPinnedEnd) continue;
     if (index < keepStart || index > keepEnd) items.delete(index);
-  }
-}
-
-function getLeadingPinnedEnd(items: Map<number, ClipboardItem>) {
-  let index = 0;
-  let lastPinnedIndex = -1;
-
-  while (true) {
-    const item = items.get(index);
-    if (!item?.isPinned) return lastPinnedIndex;
-
-    lastPinnedIndex = index;
-    index += 1;
   }
 }
