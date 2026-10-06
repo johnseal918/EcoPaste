@@ -255,18 +255,20 @@ fn apply_clipboard_window_layout(app_handle: &AppHandle) -> Result<()> {
     position::position_window(&window, position)
 }
 
-/// 将置顶面板固定在主剪贴板窗口右侧。右侧空间不足时整体向左平移，
-/// 但绝不把置顶面板换到主窗口左侧。
+/// 置顶面板使用固定逻辑宽度，始终紧贴在主剪贴板窗口右侧。
+/// 主窗口移动时只同步位置，不允许沿用/放大置顶窗口当前宽度；
+/// 右侧空间不足时整体向左平移，但绝不把置顶面板换到主窗口左侧。
 pub fn sync_pinned_panel_layout(app_handle: &AppHandle) -> Result<()> {
     use tauri::{PhysicalPosition, PhysicalSize};
+
+    const PINNED_PANEL_WIDTH_LOGICAL: f64 = 360.0;
 
     let main = get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?;
     let pinned = get_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL)?;
     let main_position = main.outer_position().map_err(|err| anyhow::anyhow!(err))?;
     let main_size = main.outer_size().map_err(|err| anyhow::anyhow!(err))?;
-    let pinned_size = pinned.outer_size().map_err(|err| anyhow::anyhow!(err))?;
     let scale = main.scale_factor().map_err(|err| anyhow::anyhow!(err))?;
-    let gap = (8.0 * scale).round() as i32;
+    let pinned_width = (PINNED_PANEL_WIDTH_LOGICAL * scale).round().max(1.0) as u32;
 
     let monitor = main
         .current_monitor()
@@ -274,8 +276,11 @@ pub fn sync_pinned_panel_layout(app_handle: &AppHandle) -> Result<()> {
         .or_else(|| main.primary_monitor().ok().flatten());
     let Some(monitor) = monitor else {
         pinned
+            .set_size(PhysicalSize::new(pinned_width, main_size.height))
+            .map_err(|err| anyhow::anyhow!(err))?;
+        pinned
             .set_position(PhysicalPosition::new(
-                main_position.x + main_size.width as i32 + gap,
+                main_position.x + main_size.width as i32,
                 main_position.y,
             ))
             .map_err(|err| anyhow::anyhow!(err))?;
@@ -286,19 +291,20 @@ pub fn sync_pinned_panel_layout(app_handle: &AppHandle) -> Result<()> {
     let monitor_size = monitor.size();
     let monitor_left = monitor_position.x;
     let monitor_right = monitor_left + monitor_size.width as i32;
-    let pair_width = main_size.width as i32 + gap + pinned_size.width as i32;
+    let pair_width = main_size.width as i32 + pinned_width as i32;
     let preferred_left = main_position.x;
     let main_x = preferred_left
         .min(monitor_right - pair_width)
         .max(monitor_left);
-    let pinned_x = main_x + main_size.width as i32 + gap;
+    let pinned_x = main_x + main_size.width as i32;
 
     if main_x != main_position.x {
         main.set_position(PhysicalPosition::new(main_x, main_position.y))
             .map_err(|err| anyhow::anyhow!(err))?;
     }
+
     pinned
-        .set_size(PhysicalSize::new(pinned_size.width, main_size.height))
+        .set_size(PhysicalSize::new(pinned_width, main_size.height))
         .map_err(|err| anyhow::anyhow!(err))?;
     pinned
         .set_position(PhysicalPosition::new(pinned_x, main_position.y))
