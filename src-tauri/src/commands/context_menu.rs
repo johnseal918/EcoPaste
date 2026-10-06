@@ -31,6 +31,7 @@ pub struct ContextMenuItemPayload {
 #[serde(rename_all = "camelCase")]
 pub struct ContextMenuShowPayload {
     pub item_id: String,
+    pub target_window_label: String,
     pub is_favorite: bool,
     pub is_pinned: bool,
     /// 已按后端动作分组过滤排序；前端按二维结构渲染并自动插入分隔符。
