@@ -74,7 +74,8 @@
     "skipUpdateVersion": "跳过更新版本",
     "suspendGlobalShortcuts": "暂停全局快捷键",
     "toggleFavorite": "收藏",
-    "unpinItem": "取消置顶"
+    "unpinItem": "取消置顶",
+    "updateClipboardItem": "调整剪贴板排序"
   },
   "messages": {
     "backupExported": "已导出 {{count}} 条历史记录，备份大小 {{size}}",
