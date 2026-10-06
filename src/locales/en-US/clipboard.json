@@ -112,5 +112,13 @@
     "rtf": "RTF",
     "text": "Text",
     "url": "Link"
+  },
+  "ordering": {
+    "moveToPosition": "Move to Position",
+    "positionPlaceholder": "Enter a position, e.g. 3",
+    "confirm": "Move",
+    "cancel": "Cancel",
+    "pinnedTitle": "Pinned",
+    "pinnedEmpty": "No pinned items"
   }
 }
