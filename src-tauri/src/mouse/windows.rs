@@ -11,7 +11,7 @@ use winapi::um::winuser::{
     MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN,
 };
 
-use crate::window::{self, CLIPBOARD_WINDOW_LABEL};
+use crate::window::{self, CLIPBOARD_WINDOW_LABEL, PINNED_PANEL_WINDOW_LABEL};
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static HOOK_THREAD_ID: Mutex<Option<u32>> = Mutex::new(None);
@@ -101,24 +101,31 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
 }
 
 fn cursor_outside_clipboard_window(app: &AppHandle, cursor: POINT) -> bool {
-    let Some(window) = app.get_webview_window(CLIPBOARD_WINDOW_LABEL) else {
-        return false;
-    };
-    if !window.is_visible().unwrap_or(false) {
-        return false;
+    for label in [CLIPBOARD_WINDOW_LABEL, PINNED_PANEL_WINDOW_LABEL] {
+        let Some(window) = app.get_webview_window(label) else {
+            continue;
+        };
+        if !window.is_visible().unwrap_or(false) {
+            continue;
+        }
+
+        let Ok(position) = window.outer_position() else {
+            continue;
+        };
+        let Ok(size) = window.outer_size() else {
+            continue;
+        };
+
+        let inside = cursor.x >= position.x
+            && cursor.x < position.x + size.width as i32
+            && cursor.y >= position.y
+            && cursor.y < position.y + size.height as i32;
+        if inside {
+            return false;
+        }
     }
 
-    let Ok(position) = window.outer_position() else {
-        return false;
-    };
-    let Ok(size) = window.outer_size() else {
-        return false;
-    };
-
-    cursor.x < position.x
-        || cursor.x >= position.x + size.width as i32
-        || cursor.y < position.y
-        || cursor.y >= position.y + size.height as i32
+    true
 }
 
 /// 钩子收到的 `cursor` 是 physical 坐标，菜单矩形也用 physical 比对，
