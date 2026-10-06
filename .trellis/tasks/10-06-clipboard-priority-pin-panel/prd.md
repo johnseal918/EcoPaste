@@ -9,7 +9,7 @@ Improve daily clipboard use without changing the primary left-click-to-paste hab
    - No fixed count limit.
    - Normal item context menu: 加入排序.
    - Ordered item context menu: 移到最前 / 移到最后 / 移动到指定位置… / 取消排序.
-   - Ordered items stay in the normal scrolling history and render with a visually distinct light background plus order number.
+   - Ordered items stay in the normal scrolling history and render with a visually distinct light background; no extra title row is reserved for ordering metadata.
    - No drag-to-reorder.
 3. Pinned items no longer appear in the main history list.
 4. Pinned items appear in a dedicated panel that is always on the right side of the main clipboard window.
