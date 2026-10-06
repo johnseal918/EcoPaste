@@ -252,6 +252,14 @@ mod native {
                 Self::ToggleFavorite => "cim::toggleFavorite",
                 Self::TogglePinned => "cim::togglePinned",
                 Self::MoveToGroup => "cim::moveToGroup",
+                Self::AddToManualOrder => "cim::addToManualOrder",
+                Self::ManualOrderFirst => "cim::manualOrderFirst",
+                Self::ManualOrderLast => "cim::manualOrderLast",
+                Self::ManualOrderMoveTo => "cim::manualOrderMoveTo",
+                Self::ManualOrderRemove => "cim::manualOrderRemove",
+                Self::PinOrderFirst => "cim::pinOrderFirst",
+                Self::PinOrderLast => "cim::pinOrderLast",
+                Self::PinOrderMoveTo => "cim::pinOrderMoveTo",
                 Self::EditNote => "cim::editNote",
                 Self::Delete => "cim::delete",
             }
@@ -271,6 +279,14 @@ mod native {
                 ClipboardMenuAction::ToggleFavorite,
                 ClipboardMenuAction::TogglePinned,
                 ClipboardMenuAction::MoveToGroup,
+                ClipboardMenuAction::AddToManualOrder,
+                ClipboardMenuAction::ManualOrderFirst,
+                ClipboardMenuAction::ManualOrderLast,
+                ClipboardMenuAction::ManualOrderMoveTo,
+                ClipboardMenuAction::ManualOrderRemove,
+                ClipboardMenuAction::PinOrderFirst,
+                ClipboardMenuAction::PinOrderLast,
+                ClipboardMenuAction::PinOrderMoveTo,
                 ClipboardMenuAction::EditNote,
                 ClipboardMenuAction::Delete,
             ];
@@ -492,16 +508,21 @@ mod native {
             return;
         };
 
+        let target_window_label = state.target_window_label.lock().unwrap().clone();
+        let Some(target_window_label) = target_window_label else {
+            log::warn!("no target window label recorded for menu action {menu_id}");
+            return;
+        };
         let payload = MenuActionPayload {
             action,
             item_id,
             group_id: group_id_from_menu_id(menu_id),
         };
-        let Some(main) = app.get_webview_window(CLIPBOARD_WINDOW_LABEL) else {
-            log::warn!("clipboard window missing on clipboard menu dispatch");
+        let Some(target) = app.get_webview_window(&target_window_label) else {
+            log::warn!("clipboard menu target window missing: {target_window_label}");
             return;
         };
-        if let Err(err) = main.emit(CLIPBOARD_MENU_ACTION_EVENT, payload) {
+        if let Err(err) = target.emit(CLIPBOARD_MENU_ACTION_EVENT, payload) {
             log::warn!("emit {CLIPBOARD_MENU_ACTION_EVENT} failed: {err}");
         }
     }
@@ -537,14 +558,35 @@ pub async fn popup_clipboard_item_menu(
             name: group.name,
         })
         .collect::<Vec<_>>();
+    let (manual_order, _pin_order) =
+        crate::db::items::item_order_state(&pool, &input.item_id).await?;
+    let mut available_actions = input.available_actions;
+    if input.is_pinned {
+        available_actions.extend([
+            ClipboardMenuAction::PinOrderFirst,
+            ClipboardMenuAction::PinOrderLast,
+            ClipboardMenuAction::PinOrderMoveTo,
+        ]);
+    } else if manual_order.is_some() {
+        available_actions.extend([
+            ClipboardMenuAction::ManualOrderFirst,
+            ClipboardMenuAction::ManualOrderLast,
+            ClipboardMenuAction::ManualOrderMoveTo,
+            ClipboardMenuAction::ManualOrderRemove,
+        ]);
+    } else {
+        available_actions.push(ClipboardMenuAction::AddToManualOrder);
+    }
+
     let request = ClipboardItemMenuRequest {
         item_id: input.item_id,
-        available_actions: input.available_actions,
+        available_actions,
         groups,
         current_group_id: input.current_group_id,
         is_favorite: input.is_favorite,
         is_pinned: input.is_pinned,
         has_note: input.has_note,
+        target_window_label: input.target_window_label,
     };
 
     #[cfg(target_os = "macos")]
