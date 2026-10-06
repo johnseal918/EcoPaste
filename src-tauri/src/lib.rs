@@ -279,6 +279,15 @@ pub fn run() {
                 if window::intercept_close_request(window) {
                     api.prevent_close();
                 }
+                return;
+            }
+
+            if window.label() == window::CLIPBOARD_WINDOW_LABEL
+                && matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_))
+            {
+                if let Err(err) = window::sync_pinned_panel_layout(window.app_handle()) {
+                    log::debug!("sync pinned panel after clipboard geometry change failed: {err}");
+                }
             }
         })
         .build(tauri::generate_context!())
