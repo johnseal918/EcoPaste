@@ -39,6 +39,7 @@ interface ClipboardCardProps {
   onAuxClick?: (event: MouseEvent<HTMLDivElement>) => void;
   onDoubleClick?: (event: MouseEvent<HTMLDivElement>) => void;
   availableActions?: ClipboardAction[];
+  disableContextMenu?: boolean;
   quickActions?: ItemAction[];
   quickActionLabels?: ItemActionLabels;
   onQuickAction?: (action: ItemAction) => Promise<void> | void;
@@ -67,6 +68,7 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
     onAuxClick,
     onDoubleClick,
     availableActions,
+    disableContextMenu = false,
     quickActions = [],
     quickActionLabels,
     onQuickAction,
@@ -86,6 +88,7 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
 
   const handleContextMenu = async (event: MouseEvent) => {
     event.preventDefault();
+    if (disableContextMenu) return;
 
     const actions = availableActions ?? item.availableActions ?? [];
     const { isFavorite, isPinned, note } = item;
