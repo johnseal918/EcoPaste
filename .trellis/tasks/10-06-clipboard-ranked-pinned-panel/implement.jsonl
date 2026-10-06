@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/database-and-storage.md","reason":"Schema migration, query ordering, transaction, and metadata timestamp rules."}
+{"file":".trellis/spec/backend/commands-and-events.md","reason":"Thin command boundary and event contracts."}
+{"file":".trellis/spec/backend/settings-window-platform.md","reason":"Companion window lifecycle and geometry behavior."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Clipboard card and pinned-panel component conventions."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"UI interaction and validation requirements."}
