@@ -68,6 +68,7 @@ export interface ContextMenuShowPayload {
   itemId: string;
   isFavorite: boolean;
   isPinned: boolean;
+  targetWindowLabel: string;
   groups: Array<Array<ContextMenuItemPayload>>;
 }
 
@@ -76,6 +77,7 @@ export interface ShowContextSubmenuInput {
   anchor: ContextSubmenuAnchor;
   groups: ContextSubmenuGroupInput[];
   itemId: string;
+  targetWindowLabel: string;
 }
 
 export interface ClipboardPreviewState {
@@ -1070,6 +1072,45 @@ export const toggleClipboardItemPinned = async (
   return next;
 };
 
+/** 将普通历史记录加入手动排序区末尾。 */
+export const addClipboardItemToManualOrder = (id: string) => {
+  return call<void>(
+    TAURI_COMMAND.ADD_CLIPBOARD_ITEM_TO_MANUAL_ORDER,
+    "commands:labels.saveClipboardOrder",
+    { id },
+  );
+};
+
+/** 将手动排序记录移动到指定 1-based 位置。 */
+export const moveClipboardItemManualOrder = (
+  id: string,
+  position: number,
+) => {
+  return call<void>(
+    TAURI_COMMAND.MOVE_CLIPBOARD_ITEM_MANUAL_ORDER,
+    "commands:labels.saveClipboardOrder",
+    { id, position },
+  );
+};
+
+/** 取消普通历史记录的手动排序。 */
+export const removeClipboardItemManualOrder = (id: string) => {
+  return call<void>(
+    TAURI_COMMAND.REMOVE_CLIPBOARD_ITEM_MANUAL_ORDER,
+    "commands:labels.saveClipboardOrder",
+    { id },
+  );
+};
+
+/** 将置顶记录移动到指定 1-based 位置。 */
+export const moveClipboardItemPinOrder = (id: string, position: number) => {
+  return call<void>(
+    TAURI_COMMAND.MOVE_CLIPBOARD_ITEM_PIN_ORDER,
+    "commands:labels.saveClipboardOrder",
+    { id, position },
+  );
+};
+
 /**
  * 删除条目；命令**不**广播 `clipboard://updated`，调用方需根据返回值本地移除该项。
  * 普通条目、收藏条目与置顶条目分别读取对应保护 / 确认开关。
@@ -1314,10 +1355,14 @@ export const setClipboardWindowAutoHideSuspended = (suspended: boolean) => {
 /**
  * Windows 剪贴板窗口输入编辑模式：输入控件激活期间临时可聚焦，编辑结束后恢复不可聚焦。
  */
-export const setClipboardWindowEditing = async (editing: boolean) => {
+export const setClipboardWindowEditing = async (
+  editing: boolean,
+  label: string,
+) => {
   try {
     await invoke<void>(TAURI_COMMAND.SET_CLIPBOARD_WINDOW_EDITING, {
       editing,
+      label,
     });
   } catch (error) {
     log.error("set clipboard window editing failed", toAppError(error));
@@ -1396,6 +1441,7 @@ export const popupClipboardItemMenu = (
   isFavorite: boolean,
   isPinned: boolean,
   hasNote: boolean,
+  targetWindowLabel: string,
 ) => {
   return call<void>(
     TAURI_COMMAND.POPUP_CLIPBOARD_ITEM_MENU,
@@ -1408,6 +1454,7 @@ export const popupClipboardItemMenu = (
         isFavorite,
         isPinned,
         itemId,
+        targetWindowLabel,
       },
     },
   );

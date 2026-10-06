@@ -10,7 +10,10 @@ use tauri_nspanel::{
     tauri_panel, CollectionBehavior, ManagerExt, PanelLevel, StyleMask, WebviewWindowExt,
 };
 
-use super::{get_window, CLIPBOARD_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PREFERENCE_WINDOW_LABEL};
+use super::{
+    get_window, CLIPBOARD_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PINNED_PANEL_WINDOW_LABEL,
+    PREFERENCE_WINDOW_LABEL,
+};
 use crate::core::Result;
 use crate::settings::SettingsStore;
 
@@ -78,14 +81,16 @@ pub fn setup_clipboard_panel(app_handle: &AppHandle) -> Result<()> {
 
 pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
     if label == CLIPBOARD_WINDOW_LABEL {
-        show_clipboard_panel(app_handle)
-    } else {
-        let window = get_window(app_handle, label)?;
-        window.show().map_err(|e| anyhow::anyhow!(e))?;
-        window.unminimize().map_err(|e| anyhow::anyhow!(e))?;
-        window.set_focus().map_err(|e| anyhow::anyhow!(e))?;
-        Ok(())
+        return show_clipboard_panel(app_handle);
     }
+
+    let window = get_window(app_handle, label)?;
+    window.show().map_err(|e| anyhow::anyhow!(e))?;
+    window.unminimize().map_err(|e| anyhow::anyhow!(e))?;
+    if label != PINNED_PANEL_WINDOW_LABEL {
+        window.set_focus().map_err(|e| anyhow::anyhow!(e))?;
+    }
+    Ok(())
 }
 
 pub fn hide_window(app_handle: &AppHandle, label: &str) -> Result<()> {

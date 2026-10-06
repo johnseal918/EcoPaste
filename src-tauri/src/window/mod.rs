@@ -15,12 +15,16 @@ pub use state::WindowStateStore;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, Window,
+};
 
 use crate::core::Result;
 use crate::settings::{SettingsStore, WindowPosition};
 
 pub const CLIPBOARD_WINDOW_LABEL: &str = "clipboard";
+pub const PINNED_PANEL_WINDOW_LABEL: &str = "pinned-panel";
 pub const PREFERENCE_WINDOW_LABEL: &str = "preference";
 pub const CLIPBOARD_PREVIEW_WINDOW_LABEL: &str = "clipboard-preview";
 pub const ONBOARDING_WINDOW_LABEL: &str = "onboarding";
@@ -70,13 +74,22 @@ pub fn set_clipboard_window_auto_hide_suspended(suspended: bool) {
     CLIPBOARD_WINDOW_AUTO_HIDE_SUSPENDED.store(suspended, Ordering::Relaxed);
 }
 
-pub fn set_clipboard_window_editing(app_handle: &AppHandle, editing: bool) -> Result<()> {
+pub fn set_clipboard_window_editing(
+    app_handle: &AppHandle,
+    label: &str,
+    editing: bool,
+) -> Result<()> {
+    if !matches!(label, CLIPBOARD_WINDOW_LABEL | PINNED_PANEL_WINDOW_LABEL) {
+        return Ok(());
+    }
+
     #[cfg(target_os = "windows")]
-    return windows::set_clipboard_window_editing(app_handle, editing);
+    return windows::set_clipboard_window_editing(app_handle, label, editing);
 
     #[cfg(target_os = "macos")]
     {
         let _ = app_handle;
+        let _ = label;
         let _ = editing;
 
         Ok(())
@@ -142,6 +155,12 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
     let result = macos::show_window(app_handle, label);
     #[cfg(target_os = "windows")]
     let result = windows::show_window(app_handle, label);
+    if result.is_ok() && label == CLIPBOARD_WINDOW_LABEL {
+        if let Err(err) = show_pinned_panel_companion(app_handle) {
+            log::warn!("show pinned panel companion failed: {err}");
+        }
+    }
+
     if result.is_ok() && !delays_clipboard_visibility_event(label) {
         if label == CLIPBOARD_WINDOW_LABEL {
             preview::resume_after_clipboard_show();
@@ -172,6 +191,11 @@ pub fn hide_window(app_handle: &AppHandle, label: &str) -> Result<()> {
     #[cfg(target_os = "windows")]
     let result = windows::hide_window(app_handle, label);
     if result.is_ok() {
+        if label == CLIPBOARD_WINDOW_LABEL {
+            if let Err(err) = hide_pinned_panel_companion(app_handle) {
+                log::warn!("hide pinned panel companion failed: {err}");
+            }
+        }
         emit_visibility(app_handle, label, false);
         lifecycle::on_hidden(app_handle, label, "hide");
     }
@@ -216,12 +240,88 @@ fn apply_clipboard_window_layout(app_handle: &AppHandle) -> Result<()> {
 
     let _ = state::restore_window_state(app_handle, CLIPBOARD_WINDOW_LABEL)?;
 
-    if matches!(position, WindowPosition::Remember) {
+    if !matches!(position, WindowPosition::Remember) {
+        let window = get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?;
+        position::position_window(&window, position)?;
+    }
+
+    position_pinned_panel_right(app_handle)
+}
+
+/// 把置顶面板始终放在主剪贴板窗口右侧。
+/// 若组合宽度越过当前显示器右边界，只整体向左平移；绝不把置顶面板翻到左侧。
+fn position_pinned_panel_right(app_handle: &AppHandle) -> Result<()> {
+    let main = get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?;
+    let pinned = get_window(app_handle, PINNED_PANEL_WINDOW_LABEL)?;
+    let main_position = main.outer_position().map_err(|e| anyhow::anyhow!(e))?;
+    let main_size = main.outer_size().map_err(|e| anyhow::anyhow!(e))?;
+    let pinned_size = pinned.outer_size().map_err(|e| anyhow::anyhow!(e))?;
+    let scale = main.scale_factor().map_err(|e| anyhow::anyhow!(e))?;
+    let gap = (8.0 * scale).round() as i32;
+
+    let Some(monitor) = main.current_monitor().map_err(|e| anyhow::anyhow!(e))? else {
+        return Ok(());
+    };
+    let monitor_position = monitor.position();
+    let monitor_size = monitor.size();
+    let monitor_right = monitor_position.x + monitor_size.width as i32;
+
+    let desired_right = main_position.x
+        + main_size.width as i32
+        + gap
+        + pinned_size.width as i32;
+    let overflow = (desired_right - monitor_right).max(0);
+    let shifted_main_x = (main_position.x - overflow).max(monitor_position.x);
+
+    if shifted_main_x != main_position.x {
+        main.set_position(PhysicalPosition::new(shifted_main_x, main_position.y))
+            .map_err(|e| anyhow::anyhow!(e))?;
+    }
+
+    let main_inner = main.inner_size().map_err(|e| anyhow::anyhow!(e))?;
+    let pinned_inner = pinned.inner_size().map_err(|e| anyhow::anyhow!(e))?;
+    pinned
+        .set_size(PhysicalSize::new(pinned_inner.width, main_inner.height))
+        .map_err(|e| anyhow::anyhow!(e))?;
+    pinned
+        .set_position(PhysicalPosition::new(
+            shifted_main_x + main_size.width as i32 + gap,
+            main_position.y,
+        ))
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    Ok(())
+}
+
+fn show_pinned_panel_companion(app_handle: &AppHandle) -> Result<()> {
+    position_pinned_panel_right(app_handle)?;
+
+    #[cfg(target_os = "macos")]
+    macos::show_window(app_handle, PINNED_PANEL_WINDOW_LABEL)?;
+    #[cfg(target_os = "windows")]
+    windows::show_window(app_handle, PINNED_PANEL_WINDOW_LABEL)?;
+
+    emit_visibility(app_handle, PINNED_PANEL_WINDOW_LABEL, true);
+    lifecycle::on_shown(app_handle, PINNED_PANEL_WINDOW_LABEL);
+    Ok(())
+}
+
+fn hide_pinned_panel_companion(app_handle: &AppHandle) -> Result<()> {
+    if app_handle
+        .get_webview_window(PINNED_PANEL_WINDOW_LABEL)
+        .is_none()
+    {
         return Ok(());
     }
 
-    let window = get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?;
-    position::position_window(&window, position)
+    #[cfg(target_os = "macos")]
+    macos::hide_window(app_handle, PINNED_PANEL_WINDOW_LABEL)?;
+    #[cfg(target_os = "windows")]
+    windows::hide_window(app_handle, PINNED_PANEL_WINDOW_LABEL)?;
+
+    emit_visibility(app_handle, PINNED_PANEL_WINDOW_LABEL, false);
+    lifecycle::on_hidden(app_handle, PINNED_PANEL_WINDOW_LABEL, "companion-hide");
+    Ok(())
 }
 
 /// 保存当前所有窗口的几何信息。供应用退出（`RunEvent::ExitRequested`）时调用，

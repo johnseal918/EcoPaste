@@ -33,6 +33,7 @@ pub struct ContextMenuShowPayload {
     pub item_id: String,
     pub is_favorite: bool,
     pub is_pinned: bool,
+    pub target_window_label: String,
     /// 已按后端动作分组过滤排序；前端按二维结构渲染并自动插入分隔符。
     pub groups: Vec<Vec<ContextMenuItemPayload>>,
 }
@@ -55,6 +56,7 @@ pub struct ShowContextSubmenuInput {
     pub anchor: ContextSubmenuAnchor,
     pub groups: Vec<ContextSubmenuGroupInput>,
     pub item_id: String,
+    pub target_window_label: String,
 }
 
 /// Returns the latest pending root context-menu payload for a freshly rebuilt window.

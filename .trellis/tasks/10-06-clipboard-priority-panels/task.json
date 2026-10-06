@@ -1,0 +1,8 @@
+{
+  "title": "Clipboard priority panels",
+  "slug": "clipboard-priority-panels",
+  "status": "in_progress",
+  "branch": "feature/clipboard-priority-panels",
+  "base_branch": "master",
+  "scope": "Compact clipboard cards, manual ordering, and independent right-side pinned panel"
+}

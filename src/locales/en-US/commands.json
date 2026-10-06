@@ -74,7 +74,8 @@
     "skipUpdateVersion": "Skip update version",
     "suspendGlobalShortcuts": "Suspend global shortcuts",
     "toggleFavorite": "Favorite",
-    "unpinItem": "Unpin item"
+    "unpinItem": "Unpin item",
+    "saveClipboardOrder": "Save clipboard order"
   },
   "messages": {
     "backupExported": "Exported {{count}} history items, backup size {{size}}",

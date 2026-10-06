@@ -29,6 +29,8 @@ use crate::window::{self, CLIPBOARD_WINDOW_LABEL};
 
 /// 与前端 `src/constants/events.ts` 的 `TAURI_EVENT.CLIPBOARD_UPDATED` 一一对应。
 const CLIPBOARD_UPDATED_EVENT: &str = "clipboard://updated";
+/// 手动排序 / 置顶排序发生结构变化时广播；主列表与置顶面板都据此重拉当前范围。
+const CLIPBOARD_ORDER_UPDATED_EVENT: &str = "clipboard://order-updated";
 
 /// 与前端 `src/constants/events.ts` 的 `TAURI_EVENT.CLIPBOARD_GROUPS_UPDATED` 一一对应。
 const CLIPBOARD_GROUPS_UPDATED_EVENT: &str = "clipboard-groups://updated";
@@ -527,7 +529,8 @@ pub async fn list_clipboard_items(
 ) -> Result<ClipboardItemPage> {
     let pool = db.pool().await;
     let q = query.unwrap_or_default();
-    let (mut items, total) = crate::db::items::query_items_page(&pool, &q).await?;
+    let (mut items, total, ordered_count) =
+        crate::db::items::query_items_page(&pool, &q).await?;
     let now = Local::now();
     let settings = app.state::<SettingsStore>().snapshot();
     let file_entry_limit = settings.clipboard.display.file_entry_limit();
@@ -546,6 +549,7 @@ pub async fn list_clipboard_items(
         list: items,
         total,
         has_more,
+        ordered_count,
     })
 }
 
@@ -1329,14 +1333,81 @@ pub async fn toggle_clipboard_item_favorite(
     crate::db::items::toggle_item_favorite(&pool, &id).await
 }
 
-/// 翻转置顶状态（薄封装）。不更新 `updated_at`，避免污染最近使用排序。
+/// 翻转置顶状态。置顶项会从主列表移入右侧面板，取消置顶则回到普通历史。
 #[tauri::command]
 pub async fn toggle_clipboard_item_pinned(
+    app: AppHandle,
     db: State<'_, DatabaseState>,
     id: String,
 ) -> Result<bool> {
     let pool = db.pool().await;
-    crate::db::items::toggle_item_pinned(&pool, &id).await
+    let next = crate::db::items::toggle_item_pinned(&pool, &id).await?;
+    emit_clipboard_order_updated(&app, &id);
+    Ok(next)
+}
+
+/// 将普通历史记录加入手动排序区末尾。
+#[tauri::command]
+pub async fn add_clipboard_item_to_manual_order(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    id: String,
+) -> Result<()> {
+    let pool = db.pool().await;
+    crate::db::items::add_item_to_manual_order(&pool, &id).await?;
+    emit_clipboard_order_updated(&app, &id);
+    Ok(())
+}
+
+/// 将手动排序记录移动到指定 1-based 位置；超出末尾自动夹到末尾。
+#[tauri::command]
+pub async fn move_clipboard_item_manual_order(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    id: String,
+    position: i64,
+) -> Result<()> {
+    let pool = db.pool().await;
+    crate::db::items::move_item_manual_order(&pool, &id, position).await?;
+    emit_clipboard_order_updated(&app, &id);
+    Ok(())
+}
+
+/// 取消普通历史记录的手动排序。
+#[tauri::command]
+pub async fn remove_clipboard_item_manual_order(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    id: String,
+) -> Result<()> {
+    let pool = db.pool().await;
+    crate::db::items::remove_item_manual_order(&pool, &id).await?;
+    emit_clipboard_order_updated(&app, &id);
+    Ok(())
+}
+
+/// 将置顶记录移动到指定 1-based 位置；超出末尾自动夹到末尾。
+#[tauri::command]
+pub async fn move_clipboard_item_pin_order(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    id: String,
+    position: i64,
+) -> Result<()> {
+    let pool = db.pool().await;
+    crate::db::items::move_item_pin_order(&pool, &id, position).await?;
+    emit_clipboard_order_updated(&app, &id);
+    Ok(())
+}
+
+/// 广播排序变化。事件只携带 id；两块列表都以数据库顺序为准重拉当前范围。
+fn emit_clipboard_order_updated(app: &AppHandle, id: &str) {
+    if let Err(err) = app.emit(
+        CLIPBOARD_ORDER_UPDATED_EVENT,
+        serde_json::json!({ "id": id }),
+    ) {
+        log::warn!("emit {CLIPBOARD_ORDER_UPDATED_EVENT} failed: {err}");
+    }
 }
 
 /// 删除单条记录（薄封装）。若删的是图片记录，连带删除其落盘文件（原图 + 缩略图）。

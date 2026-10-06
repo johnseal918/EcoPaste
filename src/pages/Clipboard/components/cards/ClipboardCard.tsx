@@ -1,14 +1,12 @@
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { DragEvent, FC, MouseEvent, PointerEvent, Ref } from "react";
 import { useState } from "react";
-import { useTranslation } from "react-i18next";
 import { popupClipboardItemMenu, startDragClipboardItem } from "@/commands";
-import AssetImage from "@/components/AssetImage";
 import KeyHint from "@/components/KeyHint";
 import type { ItemActionLabels } from "@/constants/itemActions";
 import type { ClipboardAction, ClipboardItem } from "@/types/clipboard";
 import type { ItemAction } from "@/types/settings";
 import { cn } from "@/utils/cn";
-import { isMac } from "@/utils/is";
 import ClipboardQuickActions from "./ClipboardQuickActions";
 import FilesCard from "./FilesCard";
 import ImageCard from "./ImageCard";
@@ -18,6 +16,8 @@ import TextCard from "./TextCard";
 interface ClipboardCardProps {
   item: ClipboardItem;
   isSelected?: boolean;
+  /** 主列表中的手动排序项用独立背景色区分。 */
+  isManualOrdered?: boolean;
   /**
    * 快捷键提示字符（"1"–"9" / "0"），存在时在 app 图标上叠加 KeyHint；
    * 按下修饰键（macOS ⌘ / Windows Ctrl）+ 该数字键触发快速粘贴。
@@ -59,6 +59,7 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
   const {
     item,
     isSelected,
+    isManualOrdered,
     hintKey,
     onQuickPaste,
     isLinkActive,
@@ -76,27 +77,10 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
     showOriginalOnHover = true,
     rootRef,
   } = props;
-  const { kind, sourceAppId, subKind, sourceAppIconPath, sourceAppName } = item;
-  const { t } = useTranslation("clipboard");
   const [hovered, setHovered] = useState(false);
-  const typeKey = subKind ?? kind;
-  const typeLabel = t(`types.${typeKey}`);
   const body = renderBody(item, isLinkActive, onOpenLink);
   const showSensitiveIndicator = item.isSensitive && item.kind === "text";
   const showStatusIndicators = item.isPinned || showSensitiveIndicator;
-  const sourceAppIcon = sourceAppId ? (
-    <AssetImage
-      alt={sourceAppName}
-      className="size-4"
-      src={sourceAppIconPath}
-    />
-  ) : (
-    <img
-      alt="EcoPaste"
-      className="pointer-events-none size-4"
-      src={isMac ? "/logo-mac.png" : "/logo.png"}
-    />
-  );
 
   const handleDragStart = async (event: DragEvent) => {
     event.preventDefault();
@@ -119,6 +103,7 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
       isFavorite,
       isPinned,
       Boolean(note),
+      getCurrentWebviewWindow().label,
     );
   };
 
@@ -140,6 +125,7 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
         {
           "border-ant-primary bg-ant-blue-1": isSelected,
           "border-ant-primary bg-ant-container": item.isPinned && !isSelected,
+          "bg-ant-warning-bg": isManualOrdered && !isSelected,
         },
       )}
       draggable
@@ -155,19 +141,15 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
       role="option"
       tabIndex={-1}
     >
-      <div className="flex items-center justify-between text-ant-secondary text-xs">
-        <div className="flex min-w-0 items-center gap-1 overflow-hidden">
-          {hintKey ? (
-            <KeyHint hintKey={hintKey} onKeyPress={onQuickPaste}>
-              {sourceAppIcon}
-            </KeyHint>
-          ) : (
-            sourceAppIcon
-          )}
-
-          <span className="truncate">{typeLabel}</span>
+      {hintKey ? (
+        <div className="absolute top-2 left-2 z-1">
+          <KeyHint hintKey={hintKey} onKeyPress={onQuickPaste}>
+            <span className="block size-1" />
+          </KeyHint>
         </div>
+      ) : null}
 
+      <div className="absolute top-1 right-2 z-1 text-ant-secondary text-xs">
         <ClipboardQuickActions
           item={item}
           labels={quickActionLabels}

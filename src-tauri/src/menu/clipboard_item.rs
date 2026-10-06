@@ -38,6 +38,14 @@ pub enum ClipboardMenuAction {
     ToggleFavorite,
     TogglePinned,
     MoveToGroup,
+    AddToManualOrder,
+    ManualOrderFirst,
+    ManualOrderLast,
+    ManualOrderMoveTo,
+    ManualOrderRemove,
+    PinOrderFirst,
+    PinOrderLast,
+    PinOrderMoveTo,
     EditNote,
     Delete,
 }
@@ -78,6 +86,11 @@ impl ClipboardMenuAction {
                 }
             }
             Self::MoveToGroup => Key::MoveToGroup,
+            Self::AddToManualOrder => Key::AddToManualOrder,
+            Self::ManualOrderFirst | Self::PinOrderFirst => Key::MoveOrderFirst,
+            Self::ManualOrderLast | Self::PinOrderLast => Key::MoveOrderLast,
+            Self::ManualOrderMoveTo | Self::PinOrderMoveTo => Key::MoveOrderToPosition,
+            Self::ManualOrderRemove => Key::RemoveManualOrder,
             Self::EditNote => {
                 if has_note {
                     Key::EditNote
@@ -103,7 +116,15 @@ impl ClipboardMenuAction {
             }
             Self::ToggleFavorite => Some("CmdOrCtrl+D"),
             Self::TogglePinned => Some("CmdOrCtrl+T"),
-            Self::MoveToGroup => None,
+            Self::MoveToGroup
+            | Self::AddToManualOrder
+            | Self::ManualOrderFirst
+            | Self::ManualOrderLast
+            | Self::ManualOrderMoveTo
+            | Self::ManualOrderRemove
+            | Self::PinOrderFirst
+            | Self::PinOrderLast
+            | Self::PinOrderMoveTo => None,
             Self::EditNote => Some("CmdOrCtrl+M"),
             Self::Delete => Some("CmdOrCtrl+Backspace"),
         }
@@ -131,6 +152,16 @@ pub(super) const ACTION_GROUPS: &[&[ClipboardMenuAction]] = &[
         ClipboardMenuAction::MoveToGroup,
         ClipboardMenuAction::EditNote,
     ],
+    &[
+        ClipboardMenuAction::AddToManualOrder,
+        ClipboardMenuAction::ManualOrderFirst,
+        ClipboardMenuAction::ManualOrderLast,
+        ClipboardMenuAction::ManualOrderMoveTo,
+        ClipboardMenuAction::ManualOrderRemove,
+        ClipboardMenuAction::PinOrderFirst,
+        ClipboardMenuAction::PinOrderLast,
+        ClipboardMenuAction::PinOrderMoveTo,
+    ],
     &[ClipboardMenuAction::Delete],
 ];
 
@@ -152,6 +183,7 @@ pub struct PopupClipboardItemMenuInput {
     pub is_favorite: bool,
     pub is_pinned: bool,
     pub has_note: bool,
+    pub target_window_label: String,
 }
 
 /// 构建右键菜单所需的完整上下文，包含命令参数与实时读取的分组列表。
@@ -164,6 +196,7 @@ pub(super) struct ClipboardItemMenuRequest {
     pub is_favorite: bool,
     pub is_pinned: bool,
     pub has_note: bool,
+    pub target_window_label: String,
 }
 
 /// 菜单点击后 emit 给前端的 payload。Windows 自定义菜单窗也复用这个结构发回
@@ -194,7 +227,6 @@ mod native {
 
     use crate::core::{AppError, Result};
     use crate::settings::Language;
-    use crate::window::CLIPBOARD_WINDOW_LABEL;
 
     use super::{
         ClipboardItemMenuRequest, ClipboardMenuAction, ClipboardMenuGroup, MenuActionPayload,
@@ -220,6 +252,14 @@ mod native {
                 Self::ToggleFavorite => "cim::toggleFavorite",
                 Self::TogglePinned => "cim::togglePinned",
                 Self::MoveToGroup => "cim::moveToGroup",
+                Self::AddToManualOrder => "cim::addToManualOrder",
+                Self::ManualOrderFirst => "cim::manualOrderFirst",
+                Self::ManualOrderLast => "cim::manualOrderLast",
+                Self::ManualOrderMoveTo => "cim::manualOrderMoveTo",
+                Self::ManualOrderRemove => "cim::manualOrderRemove",
+                Self::PinOrderFirst => "cim::pinOrderFirst",
+                Self::PinOrderLast => "cim::pinOrderLast",
+                Self::PinOrderMoveTo => "cim::pinOrderMoveTo",
                 Self::EditNote => "cim::editNote",
                 Self::Delete => "cim::delete",
             }
@@ -239,6 +279,14 @@ mod native {
                 ClipboardMenuAction::ToggleFavorite,
                 ClipboardMenuAction::TogglePinned,
                 ClipboardMenuAction::MoveToGroup,
+                ClipboardMenuAction::AddToManualOrder,
+                ClipboardMenuAction::ManualOrderFirst,
+                ClipboardMenuAction::ManualOrderLast,
+                ClipboardMenuAction::ManualOrderMoveTo,
+                ClipboardMenuAction::ManualOrderRemove,
+                ClipboardMenuAction::PinOrderFirst,
+                ClipboardMenuAction::PinOrderLast,
+                ClipboardMenuAction::PinOrderMoveTo,
                 ClipboardMenuAction::EditNote,
                 ClipboardMenuAction::Delete,
             ];
@@ -264,6 +312,7 @@ mod native {
     pub(super) struct ClipboardItemMenuState {
         current: Mutex<Option<Menu<Wry>>>,
         target_item_id: Mutex<Option<String>>,
+        target_window_label: Mutex<Option<String>>,
     }
 
     pub(super) fn init(app: &AppHandle) {
@@ -278,10 +327,12 @@ mod native {
             AppError::Other(anyhow::anyhow!("ClipboardItemMenuState not managed"))
         })?;
         *state.target_item_id.lock().unwrap() = Some(request.item_id.clone());
+        *state.target_window_label.lock().unwrap() =
+            Some(request.target_window_label.clone());
 
         let window = app
-            .get_webview_window(CLIPBOARD_WINDOW_LABEL)
-            .ok_or_else(|| AppError::Other(anyhow::anyhow!("clipboard window missing")))?;
+            .get_webview_window(&request.target_window_label)
+            .ok_or_else(|| AppError::Other(anyhow::anyhow!("clipboard menu owner window missing")))?;
 
         let app_for_main = app.clone();
         let window_for_main = window.clone();
@@ -457,16 +508,21 @@ mod native {
             return;
         };
 
+        let target_window_label = state.target_window_label.lock().unwrap().clone();
+        let Some(target_window_label) = target_window_label else {
+            log::warn!("no target window label recorded for menu action {menu_id}");
+            return;
+        };
         let payload = MenuActionPayload {
             action,
             item_id,
             group_id: group_id_from_menu_id(menu_id),
         };
-        let Some(main) = app.get_webview_window(CLIPBOARD_WINDOW_LABEL) else {
-            log::warn!("clipboard window missing on clipboard menu dispatch");
+        let Some(target) = app.get_webview_window(&target_window_label) else {
+            log::warn!("clipboard menu target window missing: {target_window_label}");
             return;
         };
-        if let Err(err) = main.emit(CLIPBOARD_MENU_ACTION_EVENT, payload) {
+        if let Err(err) = target.emit(CLIPBOARD_MENU_ACTION_EVENT, payload) {
             log::warn!("emit {CLIPBOARD_MENU_ACTION_EVENT} failed: {err}");
         }
     }
@@ -502,14 +558,35 @@ pub async fn popup_clipboard_item_menu(
             name: group.name,
         })
         .collect::<Vec<_>>();
+    let (manual_order, _pin_order) =
+        crate::db::items::item_order_state(&pool, &input.item_id).await?;
+    let mut available_actions = input.available_actions;
+    if input.is_pinned {
+        available_actions.extend([
+            ClipboardMenuAction::PinOrderFirst,
+            ClipboardMenuAction::PinOrderLast,
+            ClipboardMenuAction::PinOrderMoveTo,
+        ]);
+    } else if manual_order.is_some() {
+        available_actions.extend([
+            ClipboardMenuAction::ManualOrderFirst,
+            ClipboardMenuAction::ManualOrderLast,
+            ClipboardMenuAction::ManualOrderMoveTo,
+            ClipboardMenuAction::ManualOrderRemove,
+        ]);
+    } else {
+        available_actions.push(ClipboardMenuAction::AddToManualOrder);
+    }
+
     let request = ClipboardItemMenuRequest {
         item_id: input.item_id,
-        available_actions: input.available_actions,
+        available_actions,
         groups,
         current_group_id: input.current_group_id,
         is_favorite: input.is_favorite,
         is_pinned: input.is_pinned,
         has_note: input.has_note,
+        target_window_label: input.target_window_label,
     };
 
     #[cfg(target_os = "macos")]

@@ -141,6 +141,7 @@ pub(super) fn show_for_clipboard_item(
         item_id: request.item_id.clone(),
         is_favorite: request.is_favorite,
         is_pinned: request.is_pinned,
+        target_window_label: request.target_window_label.clone(),
         groups,
     };
     set_context_menu_payload(Some(payload.clone()));

@@ -40,6 +40,7 @@ export const useClipboardItems = (query: ClipboardItemQuery) => {
 
   const [items, setItems] = useState(() => new Map<number, ClipboardItem>());
   const [total, setTotal] = useState(0);
+  const [orderedCount, setOrderedCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadedInitial, setLoadedInitial] = useState(false);
   const [loadingRangeCount, setLoadingRangeCount] = useState(0);
@@ -119,6 +120,7 @@ export const useClipboardItems = (query: ClipboardItemQuery) => {
         trimCache(nextItems, viewRangeRef.current, nextTotal);
         commitItems(nextItems);
         commitTotal(nextTotal);
+        setOrderedCount(Math.max(0, page.orderedCount));
         commitLoadedInitial(true);
       } catch {
         // 命令包装层已统一 log + toast；这里只避免初始请求失败后卡在 loading。
@@ -153,6 +155,7 @@ export const useClipboardItems = (query: ClipboardItemQuery) => {
     if (!loadedInitialRef.current) {
       commitItems(new Map());
       commitTotal(0);
+      setOrderedCount(0);
       commitLoadedInitial(false);
       setLoading(true);
     }
@@ -180,6 +183,7 @@ export const useClipboardItems = (query: ClipboardItemQuery) => {
     resetLoadingRanges();
     commitItems(new Map());
     commitTotal(0);
+    setOrderedCount(0);
     commitLoadedInitial(false);
     setLoading(true);
     viewRangeRef.current = {
@@ -334,6 +338,7 @@ export const useClipboardItems = (query: ClipboardItemQuery) => {
     reload,
     reloadCurrentRange,
     removeItemById,
+    orderedCount,
     total,
   };
 };

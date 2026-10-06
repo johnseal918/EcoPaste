@@ -32,6 +32,14 @@ export type ClipboardAction =
   | "toggleFavorite"
   | "togglePinned"
   | "moveToGroup"
+  | "addToManualOrder"
+  | "manualOrderFirst"
+  | "manualOrderLast"
+  | "manualOrderMoveTo"
+  | "manualOrderRemove"
+  | "pinOrderFirst"
+  | "pinOrderLast"
+  | "pinOrderMoveTo"
   | "editNote"
   | "delete";
 
@@ -149,6 +157,8 @@ export interface ClipboardItemPage {
   list: ClipboardItem[];
   total: number;
   hasMore: boolean;
+  /** 当前过滤下位于列表开头的手动排序项数量。 */
+  orderedCount: number;
 }
 
 /**

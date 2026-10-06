@@ -8,19 +8,18 @@ import type {
 } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  type TopItemListProps,
-  Virtuoso,
-  type VirtuosoHandle,
-} from "react-virtuoso";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { useSnapshot } from "valtio";
 import {
+  addClipboardItemToManualOrder,
   deleteClipboardItem,
   hideWindow,
   listClipboardGroups,
+  moveClipboardItemManualOrder,
   openClipboardItemLink,
   pasteClipboardItem,
   revealClipboardItem,
+  removeClipboardItemManualOrder,
   saveClipboardImageToFile,
   toggleClipboardItemFavorite,
   toggleClipboardItemPinned,
@@ -61,6 +60,7 @@ import {
 } from "../hooks/useClipboardPreviewController";
 import ClipboardCard from "./cards/ClipboardCard";
 import NoteModal from "./NoteModal";
+import OrderPositionModal from "./OrderPositionModal";
 
 /** 前 10 项的快捷键：index 0-8 对应 1-9，index 9 对应 0 */
 const KEY_HINTS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
@@ -90,6 +90,8 @@ const List: FC = () => {
   const [isModifierPressed, setIsModifierPressed] = useState(false);
   const [customGroups, setCustomGroups] = useState<ClipboardGroupRecord[]>([]);
   const [noteTarget, setNoteTarget] = useState<ClipboardItem | null>(null);
+  const [manualOrderPositionTargetId, setManualOrderPositionTargetId] =
+    useState<string | null>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const isAtTopRef = useRef(true);
   const itemElementMapRef = useRef(new Map<string, HTMLDivElement>());
@@ -127,6 +129,7 @@ const List: FC = () => {
     loadRange,
     loadedInitial,
     loading,
+    orderedCount,
     patchItemById,
     reload,
     reloadCurrentRange,
@@ -137,9 +140,9 @@ const List: FC = () => {
     groupId: groupId ?? void 0,
     keyword,
     kind: category ?? void 0,
+    pinned: false,
     sort,
   });
-  const topItemCount = countLeadingPinnedItems(getItem);
   const {
     closeHoverPreviewForScroll,
     closePreview,
@@ -157,6 +160,15 @@ const List: FC = () => {
   });
   closePreviewRef.current = closePreview;
   reloadCurrentRangeRef.current = reloadCurrentRange;
+
+  const handleClipboardOrderUpdated = () => {
+    reloadCurrentRangeRef.current();
+  };
+
+  useTauriListen(
+    TAURI_EVENT.CLIPBOARD_ORDER_UPDATED,
+    handleClipboardOrderUpdated,
+  );
 
   // 把 Rust 返回的同过滤下总数同步给 Footer（共享 store），避免 Footer 单独 IPC 计数。
   useEffect(() => {
@@ -486,6 +498,29 @@ const List: FC = () => {
     reloadCurrentRange();
   };
 
+  const handleAddToManualOrder = async (id: string) => {
+    await addClipboardItemToManualOrder(id);
+    reloadCurrentRange();
+  };
+
+  const handleMoveManualOrder = async (id: string, position: number) => {
+    await moveClipboardItemManualOrder(id, position);
+    reloadCurrentRange();
+  };
+
+  const handleRemoveManualOrder = async (id: string) => {
+    await removeClipboardItemManualOrder(id);
+    reloadCurrentRange();
+  };
+
+  const handleManualOrderPositionConfirm = async (position: number) => {
+    const targetId = manualOrderPositionTargetId;
+    if (!targetId) return;
+
+    await handleMoveManualOrder(targetId, position);
+    setManualOrderPositionTargetId(null);
+  };
+
   /**
    * 按当前条目后端声明的可用动作执行“打开”：链接 / 邮箱 / 定位文件共用 Cmd/Ctrl+O。
    */
@@ -566,6 +601,25 @@ const List: FC = () => {
         if (!targetGroupId) return;
 
         void handleMoveToGroup(target, targetGroupId);
+        return;
+      case "addToManualOrder":
+        void handleAddToManualOrder(target.id);
+        return;
+      case "manualOrderFirst":
+        void handleMoveManualOrder(target.id, 1);
+        return;
+      case "manualOrderLast":
+        void handleMoveManualOrder(target.id, Number.MAX_SAFE_INTEGER);
+        return;
+      case "manualOrderMoveTo":
+        setManualOrderPositionTargetId(target.id);
+        return;
+      case "manualOrderRemove":
+        void handleRemoveManualOrder(target.id);
+        return;
+      case "pinOrderFirst":
+      case "pinOrderLast":
+      case "pinOrderMoveTo":
         return;
       case "editNote":
         handleOpenNote(target, "editNote");
@@ -812,6 +866,14 @@ const List: FC = () => {
         onClose={handleCloseNote}
         onSaved={handleNoteSaved}
       />
+
+      <OrderPositionModal
+        onCancel={() => {
+          setManualOrderPositionTargetId(null);
+        }}
+        onConfirm={handleManualOrderPositionConfirm}
+        open={manualOrderPositionTargetId !== null}
+      />
     </div>
   );
 
@@ -821,13 +883,11 @@ const List: FC = () => {
     return (
       <Virtuoso
         atTopStateChange={handleAtTopStateChange}
-        components={{ TopItemList }}
         computeItemKey={computeItemKey}
         itemContent={renderItemContent}
         rangeChanged={handleRangeChanged}
         ref={virtuosoRef}
         scrollerRef={scrollerRef}
-        topItemCount={topItemCount}
         totalCount={total}
       />
     );
@@ -1012,6 +1072,7 @@ const List: FC = () => {
           availableActions={availableActions}
           hintKey={hintKey}
           isLinkActive={isModifierPressed}
+          isManualOrdered={index < orderedCount}
           isSelected={
             selectedId === null
               ? index === firstVisibleIndex
@@ -1356,37 +1417,6 @@ function shouldUseNativeCopy(event: KeyboardEvent) {
 const computeItemKey = (index: number, item?: ClipboardItem) => {
   return item?.id ?? `placeholder-${index}`;
 };
-
-/**
- * Virtuoso 的置顶项会 sticky 覆盖滚动内容；这里补实底色避免下方条目透出。
- */
-const TopItemList: FC<TopItemListProps> = (props) => {
-  const { children, style } = props;
-
-  return (
-    <div className="relative z-10 bg-ant-container" style={style}>
-      {children}
-    </div>
-  );
-};
-
-/**
- * 统计当前已加载页开头连续置顶条目数，供 Virtuoso sticky top items 使用。
- */
-function countLeadingPinnedItems(
-  getItem: (index: number) => ClipboardItem | null,
-) {
-  let count = 0;
-
-  while (true) {
-    const item = getItem(count);
-    if (!item?.isPinned) break;
-
-    count += 1;
-  }
-
-  return count;
-}
 
 /**
  * 判断普通剪贴板更新是否会出现在当前分组列表中。
