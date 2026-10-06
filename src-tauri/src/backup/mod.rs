@@ -1172,22 +1172,29 @@ async fn merge_items(
 ) -> Result<MergeOutcome> {
     let has_priority_order = backup_has_column(backup, "priority_order").await?;
     let has_pin_order = backup_has_column(backup, "pin_order").await?;
-    let priority_expr = if has_priority_order {
-        "priority_order"
-    } else {
-        "NULL AS priority_order"
+    let select: &'static str = match (has_priority_order, has_pin_order) {
+        (true, true) => {
+            "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
+             summary, file_types, size, width, height, use_count, is_favorite, is_pinned, priority_order, pin_order, is_sensitive, platform, note, \
+             created_at, updated_at FROM clipboard_items ORDER BY created_at ASC"
+        }
+        (true, false) => {
+            "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
+             summary, file_types, size, width, height, use_count, is_favorite, is_pinned, priority_order, NULL AS pin_order, is_sensitive, platform, note, \
+             created_at, updated_at FROM clipboard_items ORDER BY created_at ASC"
+        }
+        (false, true) => {
+            "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
+             summary, file_types, size, width, height, use_count, is_favorite, is_pinned, NULL AS priority_order, pin_order, is_sensitive, platform, note, \
+             created_at, updated_at FROM clipboard_items ORDER BY created_at ASC"
+        }
+        (false, false) => {
+            "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
+             summary, file_types, size, width, height, use_count, is_favorite, is_pinned, NULL AS priority_order, NULL AS pin_order, is_sensitive, platform, note, \
+             created_at, updated_at FROM clipboard_items ORDER BY created_at ASC"
+        }
     };
-    let pin_expr = if has_pin_order {
-        "pin_order"
-    } else {
-        "NULL AS pin_order"
-    };
-    let select = format!(
-        "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-         summary, file_types, size, width, height, use_count, is_favorite, is_pinned, {priority_expr}, {pin_expr}, is_sensitive, platform, note, \
-         created_at, updated_at FROM clipboard_items ORDER BY created_at ASC"
-    );
-    let rows = sqlx::query_as::<_, BackupItemRow>(&select)
+    let rows = sqlx::query_as::<_, BackupItemRow>(select)
         .fetch_all(backup)
         .await
         .context("failed to read backup items")?;
