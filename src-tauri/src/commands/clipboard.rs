@@ -774,6 +774,18 @@ fn compute_available_actions(item: &ClipboardItem) -> Vec<ClipboardAction> {
 
     actions.push(ClipboardAction::ToggleFavorite);
     actions.push(ClipboardAction::TogglePinned);
+    if item.is_pinned {
+        actions.push(ClipboardAction::PinFirst);
+        actions.push(ClipboardAction::PinLast);
+        actions.push(ClipboardAction::PinMoveTo);
+    } else if item.priority_order.is_some() {
+        actions.push(ClipboardAction::PriorityFirst);
+        actions.push(ClipboardAction::PriorityLast);
+        actions.push(ClipboardAction::PriorityMoveTo);
+        actions.push(ClipboardAction::PriorityCancel);
+    } else {
+        actions.push(ClipboardAction::AddPriority);
+    }
     actions.push(ClipboardAction::EditNote);
     actions.push(ClipboardAction::Delete);
 
@@ -1329,14 +1341,83 @@ pub async fn toggle_clipboard_item_favorite(
     crate::db::items::toggle_item_favorite(&pool, &id).await
 }
 
-/// 翻转置顶状态（薄封装）。不更新 `updated_at`，避免污染最近使用排序。
+/// 翻转置顶状态；置顶顺序由数据库层维护，不更新 `updated_at`。
 #[tauri::command]
 pub async fn toggle_clipboard_item_pinned(
+    app: AppHandle,
     db: State<'_, DatabaseState>,
     id: String,
 ) -> Result<bool> {
     let pool = db.pool().await;
-    crate::db::items::toggle_item_pinned(&pool, &id).await
+    let next = crate::db::items::toggle_item_pinned(&pool, &id).await?;
+    emit_clipboard_metadata_updated(&app, &id);
+    Ok(next)
+}
+
+/// 把普通历史加入手动排序末尾。
+#[tauri::command]
+pub async fn add_clipboard_item_priority(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    id: String,
+) -> Result<i64> {
+    let pool = db.pool().await;
+    let order = crate::db::items::add_item_priority(&pool, &id).await?;
+    emit_clipboard_metadata_updated(&app, &id);
+    Ok(order)
+}
+
+/// 移动普通手动排序项到指定位置；小于 1 归一到 1，超出范围归一到末尾。
+#[tauri::command]
+pub async fn move_clipboard_item_priority(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    id: String,
+    position: i64,
+) -> Result<i64> {
+    let pool = db.pool().await;
+    let order = crate::db::items::move_item_priority(&pool, &id, position).await?;
+    emit_clipboard_metadata_updated(&app, &id);
+    Ok(order)
+}
+
+/// 取消普通手动排序。
+#[tauri::command]
+pub async fn cancel_clipboard_item_priority(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    id: String,
+) -> Result<()> {
+    let pool = db.pool().await;
+    crate::db::items::cancel_item_priority(&pool, &id).await?;
+    emit_clipboard_metadata_updated(&app, &id);
+    Ok(())
+}
+
+/// 移动置顶项到指定位置。
+#[tauri::command]
+pub async fn move_pinned_clipboard_item(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    id: String,
+    position: i64,
+) -> Result<i64> {
+    let pool = db.pool().await;
+    let order = crate::db::items::move_pinned_item(&pool, &id, position).await?;
+    emit_clipboard_metadata_updated(&app, &id);
+    Ok(order)
+}
+
+fn emit_clipboard_metadata_updated(app: &AppHandle, id: &str) {
+    if let Err(err) = app.emit(
+        CLIPBOARD_UPDATED_EVENT,
+        serde_json::json!({
+            "id": id,
+            "metadata": true,
+        }),
+    ) {
+        log::warn!("emit {CLIPBOARD_UPDATED_EVENT} after metadata update failed: {err}");
+    }
 }
 
 /// 删除单条记录（薄封装）。若删的是图片记录，连带删除其落盘文件（原图 + 缩略图）。
