@@ -8,11 +8,7 @@ import type {
 } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  type TopItemListProps,
-  Virtuoso,
-  type VirtuosoHandle,
-} from "react-virtuoso";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { useSnapshot } from "valtio";
 import {
   deleteClipboardItem,
@@ -137,9 +133,9 @@ const List: FC = () => {
     groupId: groupId ?? void 0,
     keyword,
     kind: category ?? void 0,
+    pinned: false,
     sort,
   });
-  const topItemCount = countLeadingPinnedItems(getItem);
   const {
     closeHoverPreviewForScroll,
     closePreview,
@@ -821,13 +817,11 @@ const List: FC = () => {
     return (
       <Virtuoso
         atTopStateChange={handleAtTopStateChange}
-        components={{ TopItemList }}
         computeItemKey={computeItemKey}
         itemContent={renderItemContent}
         rangeChanged={handleRangeChanged}
         ref={virtuosoRef}
         scrollerRef={scrollerRef}
-        topItemCount={topItemCount}
         totalCount={total}
       />
     );
@@ -1356,37 +1350,6 @@ function shouldUseNativeCopy(event: KeyboardEvent) {
 const computeItemKey = (index: number, item?: ClipboardItem) => {
   return item?.id ?? `placeholder-${index}`;
 };
-
-/**
- * Virtuoso 的置顶项会 sticky 覆盖滚动内容；这里补实底色避免下方条目透出。
- */
-const TopItemList: FC<TopItemListProps> = (props) => {
-  const { children, style } = props;
-
-  return (
-    <div className="relative z-10 bg-ant-container" style={style}>
-      {children}
-    </div>
-  );
-};
-
-/**
- * 统计当前已加载页开头连续置顶条目数，供 Virtuoso sticky top items 使用。
- */
-function countLeadingPinnedItems(
-  getItem: (index: number) => ClipboardItem | null,
-) {
-  let count = 0;
-
-  while (true) {
-    const item = getItem(count);
-    if (!item?.isPinned) break;
-
-    count += 1;
-  }
-
-  return count;
-}
 
 /**
  * 判断普通剪贴板更新是否会出现在当前分组列表中。
