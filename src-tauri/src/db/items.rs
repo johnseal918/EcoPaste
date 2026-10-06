@@ -333,22 +333,6 @@ enum OrderKind {
     Pinned,
 }
 
-impl OrderKind {
-    fn column(self) -> &'static str {
-        match self {
-            Self::Priority => "priority_order",
-            Self::Pinned => "pin_order",
-        }
-    }
-
-    fn predicate(self) -> &'static str {
-        match self {
-            Self::Priority => "is_pinned = 0 AND priority_order IS NOT NULL",
-            Self::Pinned => "is_pinned = 1",
-        }
-    }
-}
-
 async fn move_ordered_item(
     pool: &SqlitePool,
     id: &str,
@@ -399,12 +383,19 @@ async fn ordered_ids_tx(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     kind: OrderKind,
 ) -> Result<Vec<String>> {
-    let sql = format!(
-        "SELECT id FROM clipboard_items WHERE {} ORDER BY {} ASC, created_at ASC, id ASC",
-        kind.predicate(),
-        kind.column()
-    );
-    sqlx::query_scalar(&sql)
+    let sql: &'static str = match kind {
+        OrderKind::Priority => {
+            "SELECT id FROM clipboard_items \
+             WHERE is_pinned = 0 AND priority_order IS NOT NULL \
+             ORDER BY priority_order ASC, created_at ASC, id ASC"
+        }
+        OrderKind::Pinned => {
+            "SELECT id FROM clipboard_items \
+             WHERE is_pinned = 1 \
+             ORDER BY pin_order ASC, created_at ASC, id ASC"
+        }
+    };
+    sqlx::query_scalar(sql)
         .fetch_all(&mut **tx)
         .await
         .context("failed to read ordered clipboard ids")
@@ -416,12 +407,12 @@ async fn write_order_tx(
     kind: OrderKind,
     ids: &[String],
 ) -> Result<()> {
-    let sql = format!(
-        "UPDATE clipboard_items SET {} = ? WHERE id = ?",
-        kind.column()
-    );
+    let sql: &'static str = match kind {
+        OrderKind::Priority => "UPDATE clipboard_items SET priority_order = ? WHERE id = ?",
+        OrderKind::Pinned => "UPDATE clipboard_items SET pin_order = ? WHERE id = ?",
+    };
     for (index, id) in ids.iter().enumerate() {
-        sqlx::query(&sql)
+        sqlx::query(sql)
             .bind((index + 1) as i64)
             .bind(id)
             .execute(&mut **tx)
