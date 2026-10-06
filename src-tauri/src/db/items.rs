@@ -218,7 +218,10 @@ pub async fn mark_item_favorite(pool: &SqlitePool, id: &str) -> Result<()> {
 /// 翻转置顶态并维护独立的置顶顺序。置顶时追加到末尾并清除普通排序；
 /// 取消置顶时清除 pin_order，随后压紧剩余置顶顺序。
 pub async fn toggle_item_pinned(pool: &SqlitePool, id: &str) -> Result<bool> {
-    let mut tx = pool.begin().await.context("failed to begin pin transaction")?;
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin pin transaction")?;
     let current: bool = sqlx::query_scalar("SELECT is_pinned FROM clipboard_items WHERE id = ?")
         .bind(id)
         .fetch_one(&mut *tx)
@@ -226,13 +229,11 @@ pub async fn toggle_item_pinned(pool: &SqlitePool, id: &str) -> Result<bool> {
         .context("failed to read clipboard item pinned state")?;
 
     if current {
-        sqlx::query(
-            "UPDATE clipboard_items SET is_pinned = 0, pin_order = NULL WHERE id = ?",
-        )
-        .bind(id)
-        .execute(&mut *tx)
-        .await
-        .context("failed to unpin clipboard item")?;
+        sqlx::query("UPDATE clipboard_items SET is_pinned = 0, pin_order = NULL WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .context("failed to unpin clipboard item")?;
         compact_order_tx(&mut tx, OrderKind::Pinned).await?;
     } else {
         let next: i64 = sqlx::query_scalar(
@@ -252,25 +253,31 @@ pub async fn toggle_item_pinned(pool: &SqlitePool, id: &str) -> Result<bool> {
         compact_order_tx(&mut tx, OrderKind::Priority).await?;
     }
 
-    tx.commit().await.context("failed to commit pin transaction")?;
+    tx.commit()
+        .await
+        .context("failed to commit pin transaction")?;
     Ok(!current)
 }
 
 /// 把普通历史加入手动排序末尾。已排序时保持原位置；置顶项不可加入普通排序。
 pub async fn add_item_priority(pool: &SqlitePool, id: &str) -> Result<i64> {
-    let mut tx = pool.begin().await.context("failed to begin priority transaction")?;
-    let row: (bool, Option<i64>) = sqlx::query_as(
-        "SELECT is_pinned, priority_order FROM clipboard_items WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_one(&mut *tx)
-    .await
-    .context("failed to read clipboard item priority state")?;
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin priority transaction")?;
+    let row: (bool, Option<i64>) =
+        sqlx::query_as("SELECT is_pinned, priority_order FROM clipboard_items WHERE id = ?")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await
+            .context("failed to read clipboard item priority state")?;
     if row.0 {
         return Err(anyhow::anyhow!("pinned item cannot join normal manual order").into());
     }
     if let Some(order) = row.1 {
-        tx.commit().await.context("failed to commit priority transaction")?;
+        tx.commit()
+            .await
+            .context("failed to commit priority transaction")?;
         return Ok(order);
     }
 
@@ -286,7 +293,9 @@ pub async fn add_item_priority(pool: &SqlitePool, id: &str) -> Result<i64> {
         .execute(&mut *tx)
         .await
         .context("failed to add clipboard item priority")?;
-    tx.commit().await.context("failed to commit priority transaction")?;
+    tx.commit()
+        .await
+        .context("failed to commit priority transaction")?;
     Ok(next)
 }
 
@@ -341,7 +350,10 @@ async fn move_ordered_item(
     position: i64,
     kind: OrderKind,
 ) -> Result<i64> {
-    let mut tx = pool.begin().await.context("failed to begin reorder transaction")?;
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin reorder transaction")?;
     let ids = ordered_ids_tx(&mut tx, kind).await?;
     let Some(current_index) = ids.iter().position(|current| current == id) else {
         return Err(anyhow::anyhow!("clipboard item is not in this ordered list").into());
@@ -352,14 +364,13 @@ async fn move_ordered_item(
     let target = position.max(1).min((reordered.len() + 1) as i64) as usize - 1;
     reordered.insert(target, item_id);
     write_order_tx(&mut tx, kind, &reordered).await?;
-    tx.commit().await.context("failed to commit reorder transaction")?;
+    tx.commit()
+        .await
+        .context("failed to commit reorder transaction")?;
     Ok((target + 1) as i64)
 }
 
-async fn compact_order_tx(
-    tx: &mut sqlx::Transaction<'_, Sqlite>,
-    kind: OrderKind,
-) -> Result<()> {
+async fn compact_order_tx(tx: &mut sqlx::Transaction<'_, Sqlite>, kind: OrderKind) -> Result<()> {
     let ids = ordered_ids_tx(tx, kind).await?;
     write_order_tx(tx, kind, &ids).await
 }
@@ -367,7 +378,10 @@ async fn compact_order_tx(
 /// 压紧普通手动排序与置顶排序到连续的 1..N。
 /// 备份合并等批量写入完成后调用，避免来源序号冲突或跳号。
 pub async fn normalize_item_orders(pool: &SqlitePool) -> Result<()> {
-    let mut tx = pool.begin().await.context("failed to begin order normalization")?;
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin order normalization")?;
     compact_order_tx(&mut tx, OrderKind::Priority).await?;
     compact_order_tx(&mut tx, OrderKind::Pinned).await?;
     tx.commit()
@@ -397,7 +411,10 @@ async fn write_order_tx(
     kind: OrderKind,
     ids: &[String],
 ) -> Result<()> {
-    let sql = format!("UPDATE clipboard_items SET {} = ? WHERE id = ?", kind.column());
+    let sql = format!(
+        "UPDATE clipboard_items SET {} = ? WHERE id = ?",
+        kind.column()
+    );
     for (index, id) in ids.iter().enumerate() {
         sqlx::query(&sql)
             .bind((index + 1) as i64)
@@ -669,9 +686,7 @@ async fn fetch_items(
 
     match q.pinned {
         Some(true) => {
-            qb.push(
-                " ORDER BY clipboard_items.pin_order IS NULL, clipboard_items.pin_order ASC, ",
-            );
+            qb.push(" ORDER BY clipboard_items.pin_order IS NULL, clipboard_items.pin_order ASC, ");
         }
         Some(false) => {
             qb.push(
@@ -1250,7 +1265,14 @@ mod tests {
         let reordered = query_items(&pool, &query).await.unwrap();
         assert_eq!(reordered[0].id, "b");
         assert_eq!(reordered[0].priority_order, Some(1));
-        assert_eq!(find_item_by_id(&pool, "d").await.unwrap().unwrap().priority_order, None);
+        assert_eq!(
+            find_item_by_id(&pool, "d")
+                .await
+                .unwrap()
+                .unwrap()
+                .priority_order,
+            None
+        );
     }
 
     #[tokio::test]
