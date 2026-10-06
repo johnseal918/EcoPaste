@@ -101,9 +101,16 @@ const ContextMenu: FC = () => {
     await hideContextMenus();
   };
 
-  const openSubmenu = (input: ShowContextSubmenuInput) => {
+  const openSubmenu = (
+    input: Omit<ShowContextSubmenuInput, "targetWindowLabel">,
+  ) => {
+    if (!payload) return;
+
     setActiveSubmenuAction(input.action);
-    void showContextSubmenu(input);
+    void showContextSubmenu({
+      ...input,
+      targetWindowLabel: payload.targetWindowLabel,
+    });
   };
 
   const closeSubmenu = () => {
@@ -153,7 +160,9 @@ interface ContextMenuItemProps {
   itemId: string;
   label: string;
   onCloseSubmenu: () => void;
-  onOpenSubmenu: (input: ShowContextSubmenuInput) => void;
+  onOpenSubmenu: (
+    input: Omit<ShowContextSubmenuInput, "targetWindowLabel">,
+  ) => void;
   onPick: (action: ClipboardAction) => void;
 }
 
@@ -273,11 +282,15 @@ export const ContextSubmenu: FC = () => {
     const groupId = event.currentTarget.dataset.groupId;
     if (!groupId) return;
 
-    await emitTo(WINDOW_LABEL.CLIPBOARD, TAURI_EVENT.CLIPBOARD_MENU_ACTION, {
-      action: payload.action,
-      groupId,
-      itemId: payload.itemId,
-    });
+    await emitTo(
+      payload.targetWindowLabel,
+      TAURI_EVENT.CLIPBOARD_MENU_ACTION,
+      {
+        action: payload.action,
+        groupId,
+        itemId: payload.itemId,
+      },
+    );
 
     await hideContextMenus();
   };
