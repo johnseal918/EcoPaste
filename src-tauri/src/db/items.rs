@@ -249,6 +249,7 @@ pub async fn toggle_item_pinned(pool: &SqlitePool, id: &str) -> Result<bool> {
         .execute(&mut *tx)
         .await
         .context("failed to pin clipboard item")?;
+        compact_order_tx(&mut tx, OrderKind::Priority).await?;
     }
 
     tx.commit().await.context("failed to commit pin transaction")?;
