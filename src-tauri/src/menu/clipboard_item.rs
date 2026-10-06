@@ -38,6 +38,14 @@ pub enum ClipboardMenuAction {
     ToggleFavorite,
     TogglePinned,
     MoveToGroup,
+    AddToManualOrder,
+    ManualOrderFirst,
+    ManualOrderLast,
+    ManualOrderMoveTo,
+    ManualOrderRemove,
+    PinOrderFirst,
+    PinOrderLast,
+    PinOrderMoveTo,
     EditNote,
     Delete,
 }
@@ -78,6 +86,11 @@ impl ClipboardMenuAction {
                 }
             }
             Self::MoveToGroup => Key::MoveToGroup,
+            Self::AddToManualOrder => Key::AddToManualOrder,
+            Self::ManualOrderFirst | Self::PinOrderFirst => Key::MoveOrderFirst,
+            Self::ManualOrderLast | Self::PinOrderLast => Key::MoveOrderLast,
+            Self::ManualOrderMoveTo | Self::PinOrderMoveTo => Key::MoveOrderToPosition,
+            Self::ManualOrderRemove => Key::RemoveManualOrder,
             Self::EditNote => {
                 if has_note {
                     Key::EditNote
@@ -103,7 +116,15 @@ impl ClipboardMenuAction {
             }
             Self::ToggleFavorite => Some("CmdOrCtrl+D"),
             Self::TogglePinned => Some("CmdOrCtrl+T"),
-            Self::MoveToGroup => None,
+            Self::MoveToGroup
+            | Self::AddToManualOrder
+            | Self::ManualOrderFirst
+            | Self::ManualOrderLast
+            | Self::ManualOrderMoveTo
+            | Self::ManualOrderRemove
+            | Self::PinOrderFirst
+            | Self::PinOrderLast
+            | Self::PinOrderMoveTo => None,
             Self::EditNote => Some("CmdOrCtrl+M"),
             Self::Delete => Some("CmdOrCtrl+Backspace"),
         }
@@ -130,6 +151,16 @@ pub(super) const ACTION_GROUPS: &[&[ClipboardMenuAction]] = &[
         ClipboardMenuAction::TogglePinned,
         ClipboardMenuAction::MoveToGroup,
         ClipboardMenuAction::EditNote,
+    ],
+    &[
+        ClipboardMenuAction::AddToManualOrder,
+        ClipboardMenuAction::ManualOrderFirst,
+        ClipboardMenuAction::ManualOrderLast,
+        ClipboardMenuAction::ManualOrderMoveTo,
+        ClipboardMenuAction::ManualOrderRemove,
+        ClipboardMenuAction::PinOrderFirst,
+        ClipboardMenuAction::PinOrderLast,
+        ClipboardMenuAction::PinOrderMoveTo,
     ],
     &[ClipboardMenuAction::Delete],
 ];
