@@ -4,8 +4,11 @@
  * 不要再裸写命令名字面量或在调用处引用这个表。
  */
 export const TAURI_COMMAND = {
+    "set_clipboard_window_auto_hide_suspended",
   ACQUIRE_WINDOW_KEEPALIVE: "acquire_window_keepalive",
   ADD_CLIPBOARD_APP_FROM_PATH: "add_clipboard_app_from_path",
+  ADD_CLIPBOARD_ITEM_PRIORITY: "add_clipboard_item_priority",
+  CANCEL_CLIPBOARD_ITEM_PRIORITY: "cancel_clipboard_item_priority",
   CHANGE_STORAGE_LOCATION: "change_storage_location",
   CHECK_FOR_UPDATES: "check_for_updates",
   CLEAN_RESOURCE_CACHE: "clean_resource_cache",
@@ -43,6 +46,8 @@ export const TAURI_COMMAND = {
   LIST_ALL_APPS: "list_all_apps",
   LIST_CLIPBOARD_GROUPS: "list_clipboard_groups",
   LIST_CLIPBOARD_ITEMS: "list_clipboard_items",
+  MOVE_CLIPBOARD_ITEM_PRIORITY: "move_clipboard_item_priority",
+  MOVE_PINNED_CLIPBOARD_ITEM: "move_pinned_clipboard_item",
   NOTIFY_WINDOW_READY: "notify_window_ready",
   OPEN_CLIPBOARD_ITEM_LINK: "open_clipboard_item_link",
   OPEN_EXTERNAL_URL: "open_external_url",
@@ -62,7 +67,6 @@ export const TAURI_COMMAND = {
   SAVE_CLIPBOARD_IMAGE_TO_FILE: "save_clipboard_image_to_file",
   SET_AUTOSTART: "set_autostart",
   SET_CLIPBOARD_WINDOW_AUTO_HIDE_SUSPENDED:
-    "set_clipboard_window_auto_hide_suspended",
   SET_CLIPBOARD_WINDOW_EDITING: "set_clipboard_window_editing",
   SET_CLIPBOARD_WINDOW_PINNED: "set_clipboard_window_pinned",
   SET_ONBOARDING_STEP: "set_onboarding_step",
@@ -79,10 +83,6 @@ export const TAURI_COMMAND = {
   TAKE_PENDING_PREFERENCE_HIGHLIGHT: "take_pending_preference_highlight",
   TOGGLE_CLIPBOARD_ITEM_FAVORITE: "toggle_clipboard_item_favorite",
   TOGGLE_CLIPBOARD_ITEM_PINNED: "toggle_clipboard_item_pinned",
-  ADD_CLIPBOARD_ITEM_PRIORITY: "add_clipboard_item_priority",
-  MOVE_CLIPBOARD_ITEM_PRIORITY: "move_clipboard_item_priority",
-  CANCEL_CLIPBOARD_ITEM_PRIORITY: "cancel_clipboard_item_priority",
-  MOVE_PINNED_CLIPBOARD_ITEM: "move_pinned_clipboard_item",
   UPDATE_CLIPBOARD_GROUP: "update_clipboard_group",
   UPDATE_CLIPBOARD_GROUPS_LAYOUT: "update_clipboard_groups_layout",
   UPDATE_CLIPBOARD_ITEM_GROUP: "update_clipboard_item_group",
