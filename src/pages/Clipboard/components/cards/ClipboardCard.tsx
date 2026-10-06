@@ -135,16 +135,6 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
       role="option"
       tabIndex={-1}
     >
-      <div className="absolute top-2 right-2 z-10 text-ant-secondary text-xs">
-        <ClipboardQuickActions
-          item={item}
-          labels={quickActionLabels}
-          onQuickAction={onQuickAction}
-          quickActions={quickActions}
-          visible={hovered}
-        />
-      </div>
-
       {hintKey ? (
         <div className="absolute top-2 left-2 z-10">
           <KeyHint hintKey={hintKey} onKeyPress={onQuickPaste}>
@@ -153,16 +143,30 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
         </div>
       ) : null}
 
-      {item.note ? (
-        <NoteContentSwitcher
-          note={item.note}
-          showOriginal={showOriginalOnHover && hovered}
-        >
-          {body}
-        </NoteContentSwitcher>
-      ) : (
-        body
-      )}
+      <div className="flex min-w-0 items-start gap-2">
+        <div className="min-w-0 flex-1">
+          {item.note ? (
+            <NoteContentSwitcher
+              note={item.note}
+              showOriginal={showOriginalOnHover && hovered}
+            >
+              {body}
+            </NoteContentSwitcher>
+          ) : (
+            body
+          )}
+        </div>
+
+        <div className="shrink-0 text-ant-secondary text-xs">
+          <ClipboardQuickActions
+            item={item}
+            labels={quickActionLabels}
+            onQuickAction={onQuickAction}
+            quickActions={quickActions}
+            visible={hovered}
+          />
+        </div>
+      </div>
       {item.isPinned && item.pinOrder !== null ? (
         <span className="pointer-events-none absolute bottom-2 left-2 inline-flex min-w-5 items-center justify-center rounded-full bg-ant-primary px-1 text-ant-light-solid text-xs">
           {item.pinOrder}
