@@ -7,7 +7,6 @@
 use anyhow::Context;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuBuilder, MenuItem, PredefinedMenuItem};
-use tauri::path::BaseDirectory;
 use tauri::tray::TrayIconBuilder;
 #[cfg(target_os = "windows")]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
@@ -41,7 +40,7 @@ pub fn init(app: &AppHandle, settings: &Settings) -> Result<()> {
         .map(|s| s.is_paused())
         .unwrap_or(false);
 
-    let icon = load_icon(app)?;
+    let icon = load_icon()?;
     let menu = build_menu(app, lang, &version, paused)?;
 
     let tray = TrayIconBuilder::with_id(TRAY_ID)
@@ -115,17 +114,18 @@ fn rebuild_menu(app: &AppHandle) -> Result<()> {
     Ok(())
 }
 
-fn load_icon(app: &AppHandle) -> Result<Image<'static>> {
-    let relative = if cfg!(target_os = "macos") {
-        "assets/tray-mac.ico"
+fn load_icon() -> Result<Image<'static>> {
+    // 托盘图标编译进可执行文件，避免 portable / --no-bundle 构建缺少外部
+    // resources 目录时 tray 初始化失败。Tauri image-ico feature 已启用。
+    let bytes: &'static [u8] = if cfg!(target_os = "macos") {
+        include_bytes!("../../assets/tray-mac.ico")
     } else {
-        "assets/tray.ico"
+        include_bytes!("../../assets/tray.ico")
     };
-    let path = app
-        .path()
-        .resolve(relative, BaseDirectory::Resource)
-        .with_context(|| format!("resolve tray icon resource {relative}"))?;
-    Ok(Image::from_path(&path).with_context(|| format!("load tray icon from {path:?}"))?)
+
+    Ok(Image::from_bytes(bytes)
+        .context("decode embedded tray icon")?
+        .to_owned())
 }
 
 fn build_menu(
