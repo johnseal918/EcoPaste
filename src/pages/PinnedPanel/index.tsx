@@ -1,5 +1,5 @@
-import { Dropdown, Empty, Spin } from "antd";
 import type { MenuProps } from "antd";
+import { Dropdown, Empty, Spin } from "antd";
 import type { FC, MouseEvent as ReactMouseEvent } from "react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -32,12 +32,9 @@ const PinnedPanel: FC = () => {
       sort: "updatedAtDesc",
     });
 
-  useTauriListen<ClipboardUpdatedPayload>(
-    TAURI_EVENT.CLIPBOARD_UPDATED,
-    () => {
-      reload();
-    },
-  );
+  useTauriListen<ClipboardUpdatedPayload>(TAURI_EVENT.CLIPBOARD_UPDATED, () => {
+    reload();
+  });
 
   const rowCount = Math.ceil(total / 2);
 
