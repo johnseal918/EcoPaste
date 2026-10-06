@@ -29,3 +29,21 @@ SET pin_order = (
     )
 )
 WHERE is_pinned = 1;
+
+CREATE TRIGGER IF NOT EXISTS trg_clipboard_items_delete_manual_order
+AFTER DELETE ON clipboard_items
+WHEN OLD.manual_order IS NOT NULL
+BEGIN
+  UPDATE clipboard_items
+  SET manual_order = manual_order - 1
+  WHERE manual_order > OLD.manual_order;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_clipboard_items_delete_pin_order
+AFTER DELETE ON clipboard_items
+WHEN OLD.pin_order IS NOT NULL
+BEGIN
+  UPDATE clipboard_items
+  SET pin_order = pin_order - 1
+  WHERE pin_order > OLD.pin_order;
+END;
