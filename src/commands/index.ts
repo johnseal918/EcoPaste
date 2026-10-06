@@ -77,6 +77,7 @@ export interface ShowContextSubmenuInput {
   anchor: ContextSubmenuAnchor;
   groups: ContextSubmenuGroupInput[];
   itemId: string;
+  targetWindowLabel: string;
 }
 
 export interface ClipboardPreviewState {
