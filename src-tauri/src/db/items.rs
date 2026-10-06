@@ -363,6 +363,18 @@ async fn compact_order_tx(
     write_order_tx(tx, kind, &ids).await
 }
 
+/// 压紧普通手动排序与置顶排序到连续的 1..N。
+/// 备份合并等批量写入完成后调用，避免来源序号冲突或跳号。
+pub async fn normalize_item_orders(pool: &SqlitePool) -> Result<()> {
+    let mut tx = pool.begin().await.context("failed to begin order normalization")?;
+    compact_order_tx(&mut tx, OrderKind::Priority).await?;
+    compact_order_tx(&mut tx, OrderKind::Pinned).await?;
+    tx.commit()
+        .await
+        .context("failed to commit order normalization")?;
+    Ok(())
+}
+
 async fn ordered_ids_tx(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     kind: OrderKind,
