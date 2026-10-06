@@ -68,6 +68,7 @@ export interface ContextMenuShowPayload {
   itemId: string;
   isFavorite: boolean;
   isPinned: boolean;
+  targetWindowLabel: string;
   groups: Array<Array<ContextMenuItemPayload>>;
 }
 
@@ -76,6 +77,7 @@ export interface ShowContextSubmenuInput {
   anchor: ContextSubmenuAnchor;
   groups: ContextSubmenuGroupInput[];
   itemId: string;
+  targetWindowLabel: string;
 }
 
 export interface ClipboardPreviewState {
@@ -1070,6 +1072,45 @@ export const toggleClipboardItemPinned = async (
   return next;
 };
 
+/** 将普通历史记录加入手动排序区末尾。 */
+export const addClipboardItemToManualOrder = (id: string) => {
+  return call<void>(
+    TAURI_COMMAND.ADD_CLIPBOARD_ITEM_TO_MANUAL_ORDER,
+    "commands:labels.saveClipboardOrder",
+    { id },
+  );
+};
+
+/** 将手动排序记录移动到指定 1-based 位置。 */
+export const moveClipboardItemManualOrder = (
+  id: string,
+  position: number,
+) => {
+  return call<void>(
+    TAURI_COMMAND.MOVE_CLIPBOARD_ITEM_MANUAL_ORDER,
+    "commands:labels.saveClipboardOrder",
+    { id, position },
+  );
+};
+
+/** 取消普通历史记录的手动排序。 */
+export const removeClipboardItemManualOrder = (id: string) => {
+  return call<void>(
+    TAURI_COMMAND.REMOVE_CLIPBOARD_ITEM_MANUAL_ORDER,
+    "commands:labels.saveClipboardOrder",
+    { id },
+  );
+};
+
+/** 将置顶记录移动到指定 1-based 位置。 */
+export const moveClipboardItemPinOrder = (id: string, position: number) => {
+  return call<void>(
+    TAURI_COMMAND.MOVE_CLIPBOARD_ITEM_PIN_ORDER,
+    "commands:labels.saveClipboardOrder",
+    { id, position },
+  );
+};
+
 /**
  * 删除条目；命令**不**广播 `clipboard://updated`，调用方需根据返回值本地移除该项。
  * 普通条目、收藏条目与置顶条目分别读取对应保护 / 确认开关。
@@ -1396,6 +1437,7 @@ export const popupClipboardItemMenu = (
   isFavorite: boolean,
   isPinned: boolean,
   hasNote: boolean,
+  targetWindowLabel: string,
 ) => {
   return call<void>(
     TAURI_COMMAND.POPUP_CLIPBOARD_ITEM_MENU,
@@ -1408,6 +1450,7 @@ export const popupClipboardItemMenu = (
         isFavorite,
         isPinned,
         itemId,
+        targetWindowLabel,
       },
     },
   );
