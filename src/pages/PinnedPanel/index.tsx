@@ -47,7 +47,7 @@ const PinnedPanel: FC = () => {
   }
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden rounded-4 bg-ant-container">
+    <div className="flex size-screen flex-col overflow-hidden bg-ant-container">
       <div
         className="flex h-12 shrink-0 items-center gap-2 border-ant-border-secondary border-b px-3 font-medium"
         data-tauri-drag-region
