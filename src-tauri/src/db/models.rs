@@ -59,6 +59,10 @@ pub struct ClipboardItem {
     pub use_count: i64,
     pub is_favorite: bool,
     pub is_pinned: bool,
+    /// 非置顶条目的手动排序位置；None 表示按普通历史排序。
+    pub manual_order: Option<i64>,
+    /// 置顶面板中的独立排序位置；仅 is_pinned=true 时使用。
+    pub pin_order: Option<i64>,
     /// 命中敏感内容规则且被收录的条目；展示是否脱敏由当前设置决定。
     pub is_sensitive: bool,
     pub platform: Platform,
