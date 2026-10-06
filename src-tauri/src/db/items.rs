@@ -1270,6 +1270,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_order_moves_compacts_and_preserves_updated_at() {
+        let pool = memory_pool().await;
+        for id in ["a", "b", "c"] {
+            insert_item(&pool, &sample_item(id)).await.unwrap();
+        }
+        let original_updated_at = find_item_by_id(&pool, "c")
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at;
+
+        assert_eq!(add_item_to_manual_order(&pool, "a").await.unwrap(), 1);
+        assert_eq!(add_item_to_manual_order(&pool, "b").await.unwrap(), 2);
+        assert_eq!(add_item_to_manual_order(&pool, "c").await.unwrap(), 3);
+        assert_eq!(move_item_manual_order(&pool, "c", 1).await.unwrap(), 1);
+
+        let ranked = query_items(
+            &pool,
+            &ClipboardItemQuery {
+                pinned: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(ids(&ranked), ["c", "a", "b"]);
+
+        remove_item_from_manual_order(&pool, "a").await.unwrap();
+        let c_item = find_item_by_id(&pool, "c").await.unwrap().unwrap();
+        let b_item = find_item_by_id(&pool, "b").await.unwrap().unwrap();
+        assert_eq!(c_item.manual_order, Some(1));
+        assert_eq!(b_item.manual_order, Some(2));
+        assert_eq!(c_item.updated_at, original_updated_at);
+    }
+
+    #[tokio::test]
+    async fn pinning_uses_independent_order_and_clears_manual_order() {
+        let pool = memory_pool().await;
+        for id in ["a", "b", "c"] {
+            insert_item(&pool, &sample_item(id)).await.unwrap();
+        }
+
+        add_item_to_manual_order(&pool, "a").await.unwrap();
+        add_item_to_manual_order(&pool, "b").await.unwrap();
+        toggle_item_pinned(&pool, "b").await.unwrap();
+        toggle_item_pinned(&pool, "c").await.unwrap();
+
+        let b = find_item_by_id(&pool, "b").await.unwrap().unwrap();
+        assert!(b.is_pinned);
+        assert_eq!(b.manual_order, None);
+        assert_eq!(b.pin_order, Some(1));
+
+        move_pinned_item_order(&pool, "c", 1).await.unwrap();
+        let pins = query_items(
+            &pool,
+            &ClipboardItemQuery {
+                pinned: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(ids(&pins), ["c", "b"]);
+
+        toggle_item_pinned(&pool, "c").await.unwrap();
+        let c = find_item_by_id(&pool, "c").await.unwrap().unwrap();
+        let b = find_item_by_id(&pool, "b").await.unwrap().unwrap();
+        assert!(!c.is_pinned);
+        assert_eq!(c.pin_order, None);
+        assert_eq!(c.manual_order, None);
+        assert_eq!(b.pin_order, Some(1));
+    }
+
+    #[tokio::test]
     async fn update_note_sets_and_clears() {
         let pool = memory_pool().await;
         insert_item(&pool, &sample_item("a")).await.unwrap();
