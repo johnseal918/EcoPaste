@@ -21,6 +21,7 @@ use crate::core::Result;
 use crate::settings::{SettingsStore, WindowPosition};
 
 pub const CLIPBOARD_WINDOW_LABEL: &str = "clipboard";
+pub const CLIPBOARD_PINNED_WINDOW_LABEL: &str = "clipboard-pinned";
 pub const PREFERENCE_WINDOW_LABEL: &str = "preference";
 pub const CLIPBOARD_PREVIEW_WINDOW_LABEL: &str = "clipboard-preview";
 pub const ONBOARDING_WINDOW_LABEL: &str = "onboarding";
@@ -122,6 +123,9 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
         if let Err(err) = apply_clipboard_window_layout(app_handle) {
             log::warn!("apply clipboard window layout failed: {err}");
         }
+        if let Err(err) = position_pinned_panel_to_right(app_handle) {
+            log::warn!("position pinned clipboard panel failed: {err}");
+        }
     } else if label == ONBOARDING_WINDOW_LABEL {
         if let Err(err) = position_window(app_handle, label, WindowPosition::Center) {
             log::warn!("center onboarding window failed: {err}");
@@ -149,6 +153,20 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
         emit_visibility(app_handle, label, true);
         lifecycle::on_shown(app_handle, label);
     }
+
+    if result.is_ok() && label == CLIPBOARD_WINDOW_LABEL {
+        #[cfg(target_os = "macos")]
+        let companion_result = macos::show_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL);
+        #[cfg(target_os = "windows")]
+        let companion_result = windows::show_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL);
+        if let Err(err) = companion_result {
+            log::warn!("show pinned clipboard panel failed: {err}");
+        } else {
+            emit_visibility(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL, true);
+            lifecycle::on_shown(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL);
+        }
+    }
+
     result
 }
 
@@ -165,6 +183,14 @@ pub fn hide_window(app_handle: &AppHandle, label: &str) -> Result<()> {
 
     if label == CLIPBOARD_WINDOW_LABEL {
         preview::suppress_for_clipboard_hide(app_handle);
+        #[cfg(target_os = "macos")]
+        let companion_result = macos::hide_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL);
+        #[cfg(target_os = "windows")]
+        let companion_result = windows::hide_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL);
+        if companion_result.is_ok() {
+            emit_visibility(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL, false);
+            lifecycle::on_hidden(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL, "companion-hide");
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -222,6 +248,58 @@ fn apply_clipboard_window_layout(app_handle: &AppHandle) -> Result<()> {
 
     let window = get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?;
     position::position_window(&window, position)
+}
+
+/// 将置顶面板固定在主剪贴板窗口右侧。右侧空间不足时整体向左平移，
+/// 但绝不把置顶面板换到主窗口左侧。
+fn position_pinned_panel_to_right(app_handle: &AppHandle) -> Result<()> {
+    use tauri::{PhysicalPosition, PhysicalSize};
+
+    let main = get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?;
+    let pinned = get_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL)?;
+    let main_position = main.outer_position().map_err(|err| anyhow::anyhow!(err))?;
+    let main_size = main.outer_size().map_err(|err| anyhow::anyhow!(err))?;
+    let pinned_size = pinned.outer_size().map_err(|err| anyhow::anyhow!(err))?;
+    let scale = main.scale_factor().map_err(|err| anyhow::anyhow!(err))?;
+    let gap = (8.0 * scale).round() as i32;
+
+    let monitor = main
+        .current_monitor()
+        .map_err(|err| anyhow::anyhow!(err))?
+        .or_else(|| main.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        pinned
+            .set_position(PhysicalPosition::new(
+                main_position.x + main_size.width as i32 + gap,
+                main_position.y,
+            ))
+            .map_err(|err| anyhow::anyhow!(err))?;
+        return Ok(());
+    };
+
+    let monitor_position = monitor.position();
+    let monitor_size = monitor.size();
+    let monitor_left = monitor_position.x;
+    let monitor_right = monitor_left + monitor_size.width as i32;
+    let pair_width = main_size.width as i32 + gap + pinned_size.width as i32;
+    let preferred_left = main_position.x;
+    let main_x = preferred_left
+        .min(monitor_right - pair_width)
+        .max(monitor_left);
+    let pinned_x = main_x + main_size.width as i32 + gap;
+
+    if main_x != main_position.x {
+        main.set_position(PhysicalPosition::new(main_x, main_position.y))
+            .map_err(|err| anyhow::anyhow!(err))?;
+    }
+    pinned
+        .set_size(PhysicalSize::new(pinned_size.width, main_size.height))
+        .map_err(|err| anyhow::anyhow!(err))?;
+    pinned
+        .set_position(PhysicalPosition::new(pinned_x, main_position.y))
+        .map_err(|err| anyhow::anyhow!(err))?;
+
+    Ok(())
 }
 
 /// 保存当前所有窗口的几何信息。供应用退出（`RunEvent::ExitRequested`）时调用，
