@@ -1346,53 +1346,80 @@ pub async fn toggle_clipboard_item_favorite(
 /// 翻转置顶状态（薄封装）。不更新 `updated_at`，避免污染最近使用排序。
 #[tauri::command]
 pub async fn toggle_clipboard_item_pinned(
+    app: AppHandle,
     db: State<'_, DatabaseState>,
     id: String,
 ) -> Result<bool> {
     let pool = db.pool().await;
-    crate::db::items::toggle_item_pinned(&pool, &id).await
+    let next = crate::db::items::toggle_item_pinned(&pool, &id).await?;
+    emit_ordering_updated(&app, &id, "pinned");
+    Ok(next)
 }
 
 /// 将普通历史加入手动排序区，默认追加到排序项末尾。
 #[tauri::command]
 pub async fn add_clipboard_item_to_manual_order(
+    app: AppHandle,
     db: State<'_, DatabaseState>,
     id: String,
 ) -> Result<i64> {
     let pool = db.pool().await;
-    crate::db::items::add_item_to_manual_order(&pool, &id).await
+    let position = crate::db::items::add_item_to_manual_order(&pool, &id).await?;
+    emit_ordering_updated(&app, &id, "manualOrder");
+    Ok(position)
 }
 
 /// 从普通历史手动排序区移除。
 #[tauri::command]
 pub async fn remove_clipboard_item_from_manual_order(
+    app: AppHandle,
     db: State<'_, DatabaseState>,
     id: String,
 ) -> Result<()> {
     let pool = db.pool().await;
-    crate::db::items::remove_item_from_manual_order(&pool, &id).await
+    crate::db::items::remove_item_from_manual_order(&pool, &id).await?;
+    emit_ordering_updated(&app, &id, "manualOrder");
+    Ok(())
 }
 
 /// 把普通历史的手动排序项移动到指定位置。
 #[tauri::command]
 pub async fn move_clipboard_item_manual_order(
+    app: AppHandle,
     db: State<'_, DatabaseState>,
     id: String,
     position: i64,
 ) -> Result<i64> {
     let pool = db.pool().await;
-    crate::db::items::move_item_manual_order(&pool, &id, position).await
+    let position = crate::db::items::move_item_manual_order(&pool, &id, position).await?;
+    emit_ordering_updated(&app, &id, "manualOrder");
+    Ok(position)
 }
 
 /// 把右侧置顶面板中的条目移动到指定位置。
 #[tauri::command]
 pub async fn move_pinned_clipboard_item_order(
+    app: AppHandle,
     db: State<'_, DatabaseState>,
     id: String,
     position: i64,
 ) -> Result<i64> {
     let pool = db.pool().await;
-    crate::db::items::move_pinned_item_order(&pool, &id, position).await
+    let position = crate::db::items::move_pinned_item_order(&pool, &id, position).await?;
+    emit_ordering_updated(&app, &id, "pinOrder");
+    Ok(position)
+}
+
+fn emit_ordering_updated(app: &AppHandle, id: &str, field: &str) {
+    if let Err(err) = app.emit(
+        CLIPBOARD_UPDATED_EVENT,
+        serde_json::json!({
+            "id": id,
+            "metadata": field,
+        }),
+    ) {
+        log::warn!("emit {CLIPBOARD_UPDATED_EVENT} after ordering change failed: {err}");
+    }
 }
 
 /// 删除单条记录（薄封装）。若删的是图片记录，连带删除其落盘文件（原图 + 缩略图）。
