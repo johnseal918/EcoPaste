@@ -584,9 +584,11 @@ const List: FC = () => {
         });
         return;
       case "priorityLast":
-        void moveClipboardItemPriority(target.id, Number.MAX_SAFE_INTEGER).then(() => {
-          reloadCurrentRange();
-        });
+        void moveClipboardItemPriority(target.id, Number.MAX_SAFE_INTEGER).then(
+          () => {
+            reloadCurrentRange();
+          },
+        );
         return;
       case "priorityMoveTo":
         setOrderTarget(target);
