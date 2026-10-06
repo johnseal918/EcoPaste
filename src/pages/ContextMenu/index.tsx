@@ -93,7 +93,7 @@ const ContextMenu: FC = () => {
   const handlePick = async (action: ClipboardAction) => {
     if (!payload) return;
 
-    await emitTo(WINDOW_LABEL.CLIPBOARD, TAURI_EVENT.CLIPBOARD_MENU_ACTION, {
+    await emitTo(payload.targetWindowLabel, TAURI_EVENT.CLIPBOARD_MENU_ACTION, {
       action,
       itemId: payload.itemId,
     });
