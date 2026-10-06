@@ -650,10 +650,27 @@ async fn fetch_items(
     qb.push(" WHERE 1 = 1");
     push_filter_clauses(&mut qb, q, &keyword);
 
-    if q.pinned == Some(true) {
-        qb.push(" ORDER BY clipboard_items.pin_order IS NULL, clipboard_items.pin_order ASC, ");
-    } else {
-        qb.push(" ORDER BY clipboard_items.priority_order IS NULL, clipboard_items.priority_order ASC, ");
+    match q.pinned {
+        Some(true) => {
+            qb.push(
+                " ORDER BY clipboard_items.pin_order IS NULL, clipboard_items.pin_order ASC, ",
+            );
+        }
+        Some(false) => {
+            qb.push(
+                " ORDER BY clipboard_items.priority_order IS NULL, clipboard_items.priority_order ASC, ",
+            );
+        }
+        None => {
+            // 保留通用查询的历史语义：置顶恒在前；未显式过滤时再分别套用各自手动顺序。
+            qb.push(
+                " ORDER BY clipboard_items.is_pinned DESC, \
+                 CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order IS NULL ELSE 1 END ASC, \
+                 CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order END ASC, \
+                 CASE WHEN clipboard_items.is_pinned = 0 THEN clipboard_items.priority_order IS NULL ELSE 1 END ASC, \
+                 CASE WHEN clipboard_items.is_pinned = 0 THEN clipboard_items.priority_order END ASC, ",
+            );
+        }
     }
     match q.sort {
         ClipboardItemSort::CreatedAt => {
