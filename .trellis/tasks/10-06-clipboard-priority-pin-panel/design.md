@@ -18,5 +18,5 @@ Add `clipboard-pinned` webview route/window. It is shown/hidden with the main cl
 
 ## UI
 - Card header drops type text; app icon/time metadata should not consume a dedicated title row.
-- Manually ordered cards render an order badge and alternate light background.
+- Manually ordered cards use an alternate light background without restoring a dedicated metadata/title row.
 - Pinned panel uses the existing card rendering in a two-column scrolling grid; no drag sorting.
