@@ -120,6 +120,10 @@
   },
   "pinnedPanel": {
     "title": "置顶",
-    "empty": "暂无置顶内容"
+    "empty": "暂无置顶内容",
+    "moveFirst": "移到最前",
+    "moveLast": "移到最后",
+    "moveTo": "移动到指定位置…",
+    "unpin": "取消置顶"
   }
 }
