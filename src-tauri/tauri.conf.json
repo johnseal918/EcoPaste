@@ -42,7 +42,7 @@
         "maximizable": false,
         "minHeight": 600,
         "minWidth": 320,
-        "resizable": true,
+        "resizable": false,
         "skipTaskbar": true,
         "title": "EcoPaste Pinned",
         "transparent": true,
