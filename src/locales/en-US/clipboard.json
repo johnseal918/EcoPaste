@@ -63,6 +63,19 @@
     "placeholder": "Add a note for this item...",
     "title": "Edit note"
   },
+  "ordering": {
+    "positionLabel": "Position",
+    "positionPlaceholder": "Enter position",
+    "positionTitle": "Move to Position"
+  },
+  "pinnedPanel": {
+    "empty": "No pinned items",
+    "moveFirst": "Move to First",
+    "moveLast": "Move to Last",
+    "moveTo": "Move to Position…",
+    "title": "Pinned",
+    "unpin": "Unpin"
+  },
   "quickActions": {
     "copy": "Copy",
     "copyPlain": "Copy as Plain Text",
@@ -112,18 +125,5 @@
     "rtf": "RTF",
     "text": "Text",
     "url": "Link"
-  },
-  "ordering": {
-    "positionTitle": "Move to Position",
-    "positionLabel": "Position",
-    "positionPlaceholder": "Enter position"
-  },
-  "pinnedPanel": {
-    "title": "Pinned",
-    "empty": "No pinned items",
-    "moveFirst": "Move to First",
-    "moveLast": "Move to Last",
-    "moveTo": "Move to Position…",
-    "unpin": "Unpin"
   }
 }
