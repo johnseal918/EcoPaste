@@ -1207,6 +1207,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_priority_moves_and_compacts_without_affecting_plain_history() {
+        let pool = memory_pool().await;
+        for (index, id) in ["a", "b", "c", "d"].iter().enumerate() {
+            let mut item = sample_item(id);
+            item.created_at = DateTime::from_timestamp(1_700_000_000 + index as i64, 0).unwrap();
+            item.updated_at = item.created_at;
+            insert_item(&pool, &item).await.unwrap();
+        }
+
+        assert_eq!(add_item_priority(&pool, "b").await.unwrap(), 1);
+        assert_eq!(add_item_priority(&pool, "d").await.unwrap(), 2);
+        assert_eq!(move_item_priority(&pool, "d", 1).await.unwrap(), 1);
+
+        let query = ClipboardItemQuery {
+            pinned: Some(false),
+            ..Default::default()
+        };
+        let ordered = query_items(&pool, &query).await.unwrap();
+        assert_eq!(ids(&ordered), ["d", "b", "c", "a"]);
+        assert_eq!(ordered[0].priority_order, Some(1));
+        assert_eq!(ordered[1].priority_order, Some(2));
+
+        cancel_item_priority(&pool, "d").await.unwrap();
+        let reordered = query_items(&pool, &query).await.unwrap();
+        assert_eq!(reordered[0].id, "b");
+        assert_eq!(reordered[0].priority_order, Some(1));
+        assert_eq!(find_item_by_id(&pool, "d").await.unwrap().unwrap().priority_order, None);
+    }
+
+    #[tokio::test]
+    async fn pinning_ordered_item_removes_priority_and_pinned_order_reorders() {
+        let pool = memory_pool().await;
+        for id in ["a", "b", "c"] {
+            insert_item(&pool, &sample_item(id)).await.unwrap();
+        }
+
+        add_item_priority(&pool, "b").await.unwrap();
+        assert!(toggle_item_pinned(&pool, "b").await.unwrap());
+        assert!(toggle_item_pinned(&pool, "c").await.unwrap());
+
+        let b = find_item_by_id(&pool, "b").await.unwrap().unwrap();
+        assert_eq!(b.priority_order, None);
+        assert_eq!(b.pin_order, Some(1));
+
+        assert_eq!(move_pinned_item(&pool, "c", 1).await.unwrap(), 1);
+        let pinned_query = ClipboardItemQuery {
+            pinned: Some(true),
+            ..Default::default()
+        };
+        let pinned = query_items(&pool, &pinned_query).await.unwrap();
+        assert_eq!(ids(&pinned), ["c", "b"]);
+        assert_eq!(pinned[0].pin_order, Some(1));
+        assert_eq!(pinned[1].pin_order, Some(2));
+
+        assert!(!toggle_item_pinned(&pool, "c").await.unwrap());
+        let remaining = query_items(&pool, &pinned_query).await.unwrap();
+        assert_eq!(ids(&remaining), ["b"]);
+        assert_eq!(remaining[0].pin_order, Some(1));
+    }
+
+    #[tokio::test]
     async fn update_note_sets_and_clears() {
         let pool = memory_pool().await;
         insert_item(&pool, &sample_item("a")).await.unwrap();
