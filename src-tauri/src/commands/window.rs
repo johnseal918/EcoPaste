@@ -110,8 +110,12 @@ pub async fn set_clipboard_window_auto_hide_suspended(suspended: bool) {
 }
 
 #[tauri::command]
-pub async fn set_clipboard_window_editing(app: AppHandle, editing: bool) -> Result<()> {
-    window::set_clipboard_window_editing(&app, editing)
+pub async fn set_clipboard_window_editing(
+    app: AppHandle,
+    label: String,
+    editing: bool,
+) -> Result<()> {
+    window::set_clipboard_window_editing(&app, &label, editing)
 }
 
 #[tauri::command]
