@@ -219,13 +219,13 @@ const PinnedPanel: FC = () => {
   };
 
   return (
-    <div className="flex size-screen flex-col overflow-hidden rounded-3 bg-ant-container">
+    <div className="flex h-screen w-screen flex-col overflow-hidden rounded-3 bg-ant-container">
       <div
         className="flex h-11 shrink-0 items-center justify-between border-ant-border-secondary border-b px-3"
         data-tauri-drag-region
       >
         <div className="flex items-center gap-2 font-medium">
-          <i className="i-ph:push-pin-bold size-4" />
+          <i className="i-lucide:pin size-4" />
           <span>{t("pinnedPanel.title")}</span>
         </div>
         <span className="text-ant-secondary text-xs">{total}</span>
