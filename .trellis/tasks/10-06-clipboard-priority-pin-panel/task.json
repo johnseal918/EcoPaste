@@ -1,8 +1,8 @@
 {
-  "name": "clipboard-priority-pin-panel",
-  "title": "Clipboard priority ordering and pinned panel",
-  "status": "validation_pending",
-  "branch": "feature/clipboard-priority-pin-panel",
   "base_branch": "master",
-  "scope": "Remove card type labels; add manual priority ordering; move pinned items to an always-right pinned panel."
+  "branch": "feature/clipboard-priority-pin-panel",
+  "name": "clipboard-priority-pin-panel",
+  "scope": "Remove card type labels; add manual priority ordering; move pinned items to an always-right pinned panel.",
+  "status": "validation_pending",
+  "title": "Clipboard priority ordering and pinned panel"
 }
