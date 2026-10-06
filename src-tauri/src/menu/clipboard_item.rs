@@ -37,6 +37,14 @@ pub enum ClipboardMenuAction {
     RevealInExplorer,
     ToggleFavorite,
     TogglePinned,
+    AddPriority,
+    PriorityFirst,
+    PriorityLast,
+    PriorityMoveTo,
+    PriorityCancel,
+    PinFirst,
+    PinLast,
+    PinMoveTo,
     MoveToGroup,
     EditNote,
     Delete,
@@ -77,6 +85,11 @@ impl ClipboardMenuAction {
                     Key::PinItem
                 }
             }
+            Self::AddPriority => Key::AddPriority,
+            Self::PriorityFirst | Self::PinFirst => Key::MoveFirst,
+            Self::PriorityLast | Self::PinLast => Key::MoveLast,
+            Self::PriorityMoveTo | Self::PinMoveTo => Key::MoveToPosition,
+            Self::PriorityCancel => Key::CancelPriority,
             Self::MoveToGroup => Key::MoveToGroup,
             Self::EditNote => {
                 if has_note {
