@@ -1071,6 +1071,56 @@ export const toggleClipboardItemPinned = async (
 };
 
 /**
+ * 将普通历史加入手动排序区，默认追加到末尾。
+ */
+export const addClipboardItemToManualOrder = (id: string) => {
+  return call<number>(
+    TAURI_COMMAND.ADD_CLIPBOARD_ITEM_TO_MANUAL_ORDER,
+    "commands:labels.updateClipboardItem",
+    { id },
+  );
+};
+
+/**
+ * 从普通历史手动排序区移除。
+ */
+export const removeClipboardItemFromManualOrder = (id: string) => {
+  return call<void>(
+    TAURI_COMMAND.REMOVE_CLIPBOARD_ITEM_FROM_MANUAL_ORDER,
+    "commands:labels.updateClipboardItem",
+    { id },
+  );
+};
+
+/**
+ * 移动普通历史手动排序项；后端会把位置限制在合法范围。
+ */
+export const moveClipboardItemManualOrder = (
+  id: string,
+  position: number,
+) => {
+  return call<number>(
+    TAURI_COMMAND.MOVE_CLIPBOARD_ITEM_MANUAL_ORDER,
+    "commands:labels.updateClipboardItem",
+    { id, position },
+  );
+};
+
+/**
+ * 移动右侧置顶面板条目；后端会把位置限制在合法范围。
+ */
+export const movePinnedClipboardItemOrder = (
+  id: string,
+  position: number,
+) => {
+  return call<number>(
+    TAURI_COMMAND.MOVE_PINNED_CLIPBOARD_ITEM_ORDER,
+    "commands:labels.updateClipboardItem",
+    { id, position },
+  );
+};
+
+/**
  * 删除条目；命令**不**广播 `clipboard://updated`，调用方需根据返回值本地移除该项。
  * 普通条目、收藏条目与置顶条目分别读取对应保护 / 确认开关。
  * 成功后统一 toast「已删除」。
