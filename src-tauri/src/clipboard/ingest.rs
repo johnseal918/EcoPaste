@@ -317,6 +317,8 @@ pub fn build_item_with_settings(
         use_count: 1,
         is_favorite: false,
         is_pinned: false,
+        manual_order: None,
+        pin_order: None,
         is_sensitive,
         platform: current_platform(),
         note: None,
