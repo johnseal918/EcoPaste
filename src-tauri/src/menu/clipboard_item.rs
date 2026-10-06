@@ -37,6 +37,14 @@ pub enum ClipboardMenuAction {
     RevealInExplorer,
     ToggleFavorite,
     TogglePinned,
+    AddToRanking,
+    MoveRankingFirst,
+    MoveRankingLast,
+    MoveRankingToPosition,
+    RemoveFromRanking,
+    MovePinnedFirst,
+    MovePinnedLast,
+    MovePinnedToPosition,
     MoveToGroup,
     EditNote,
     Delete,
@@ -77,6 +85,14 @@ impl ClipboardMenuAction {
                     Key::PinItem
                 }
             }
+            Self::AddToRanking => Key::AddToRanking,
+            Self::MoveRankingFirst => Key::MoveRankingFirst,
+            Self::MoveRankingLast => Key::MoveRankingLast,
+            Self::MoveRankingToPosition => Key::MoveRankingToPosition,
+            Self::RemoveFromRanking => Key::RemoveFromRanking,
+            Self::MovePinnedFirst => Key::MovePinnedFirst,
+            Self::MovePinnedLast => Key::MovePinnedLast,
+            Self::MovePinnedToPosition => Key::MovePinnedToPosition,
             Self::MoveToGroup => Key::MoveToGroup,
             Self::EditNote => {
                 if has_note {
@@ -103,7 +119,15 @@ impl ClipboardMenuAction {
             }
             Self::ToggleFavorite => Some("CmdOrCtrl+D"),
             Self::TogglePinned => Some("CmdOrCtrl+T"),
-            Self::MoveToGroup => None,
+            Self::AddToRanking
+            | Self::MoveRankingFirst
+            | Self::MoveRankingLast
+            | Self::MoveRankingToPosition
+            | Self::RemoveFromRanking
+            | Self::MovePinnedFirst
+            | Self::MovePinnedLast
+            | Self::MovePinnedToPosition
+            | Self::MoveToGroup => None,
             Self::EditNote => Some("CmdOrCtrl+M"),
             Self::Delete => Some("CmdOrCtrl+Backspace"),
         }
@@ -128,6 +152,14 @@ pub(super) const ACTION_GROUPS: &[&[ClipboardMenuAction]] = &[
     &[
         ClipboardMenuAction::ToggleFavorite,
         ClipboardMenuAction::TogglePinned,
+        ClipboardMenuAction::AddToRanking,
+        ClipboardMenuAction::MoveRankingFirst,
+        ClipboardMenuAction::MoveRankingLast,
+        ClipboardMenuAction::MoveRankingToPosition,
+        ClipboardMenuAction::RemoveFromRanking,
+        ClipboardMenuAction::MovePinnedFirst,
+        ClipboardMenuAction::MovePinnedLast,
+        ClipboardMenuAction::MovePinnedToPosition,
         ClipboardMenuAction::MoveToGroup,
         ClipboardMenuAction::EditNote,
     ],
@@ -219,6 +251,14 @@ mod native {
                 Self::RevealInExplorer => "cim::revealInExplorer",
                 Self::ToggleFavorite => "cim::toggleFavorite",
                 Self::TogglePinned => "cim::togglePinned",
+                Self::AddToRanking => "cim::addToRanking",
+                Self::MoveRankingFirst => "cim::moveRankingFirst",
+                Self::MoveRankingLast => "cim::moveRankingLast",
+                Self::MoveRankingToPosition => "cim::moveRankingToPosition",
+                Self::RemoveFromRanking => "cim::removeFromRanking",
+                Self::MovePinnedFirst => "cim::movePinnedFirst",
+                Self::MovePinnedLast => "cim::movePinnedLast",
+                Self::MovePinnedToPosition => "cim::movePinnedToPosition",
                 Self::MoveToGroup => "cim::moveToGroup",
                 Self::EditNote => "cim::editNote",
                 Self::Delete => "cim::delete",
@@ -238,6 +278,14 @@ mod native {
                 ClipboardMenuAction::RevealInExplorer,
                 ClipboardMenuAction::ToggleFavorite,
                 ClipboardMenuAction::TogglePinned,
+                ClipboardMenuAction::AddToRanking,
+                ClipboardMenuAction::MoveRankingFirst,
+                ClipboardMenuAction::MoveRankingLast,
+                ClipboardMenuAction::MoveRankingToPosition,
+                ClipboardMenuAction::RemoveFromRanking,
+                ClipboardMenuAction::MovePinnedFirst,
+                ClipboardMenuAction::MovePinnedLast,
+                ClipboardMenuAction::MovePinnedToPosition,
                 ClipboardMenuAction::MoveToGroup,
                 ClipboardMenuAction::EditNote,
                 ClipboardMenuAction::Delete,
