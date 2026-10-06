@@ -1647,6 +1647,8 @@ mod tests {
             use_count: 1,
             is_favorite: false,
             is_pinned: false,
+            priority_order: None,
+            pin_order: None,
             is_sensitive,
             platform: Platform::Macos,
             note: None,
