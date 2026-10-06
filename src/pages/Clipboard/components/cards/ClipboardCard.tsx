@@ -1,7 +1,7 @@
 import type { DragEvent, FC, MouseEvent, PointerEvent, Ref } from "react";
 import { useState } from "react";
-import { useTranslation } from "react-i18next";
 import { popupClipboardItemMenu, startDragClipboardItem } from "@/commands";
+import KeyHint from "@/components/KeyHint";
 import type { ItemActionLabels } from "@/constants/itemActions";
 import type { ClipboardAction, ClipboardItem } from "@/types/clipboard";
 import type { ItemAction } from "@/types/settings";
@@ -73,7 +73,6 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
     showOriginalOnHover = true,
     rootRef,
   } = props;
-  useTranslation("clipboard");
   const [hovered, setHovered] = useState(false);
   const body = renderBody(item, isLinkActive, onOpenLink);
   const showSensitiveIndicator = item.isSensitive && item.kind === "text";
@@ -147,14 +146,11 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
       </div>
 
       {hintKey ? (
-        <button
-          aria-label={`快捷粘贴 ${hintKey}`}
-          className="absolute top-2 left-2 z-10 flex size-5 items-center justify-center rounded-1.5 border border-ant-border-secondary bg-ant-container text-ant-secondary text-xs"
-          onClick={onQuickPaste}
-          type="button"
-        >
-          {hintKey}
-        </button>
+        <div className="absolute top-2 left-2 z-10">
+          <KeyHint hintKey={hintKey} onKeyPress={onQuickPaste}>
+            <span className="size-4" />
+          </KeyHint>
+        </div>
       ) : null}
 
       {item.note ? (
