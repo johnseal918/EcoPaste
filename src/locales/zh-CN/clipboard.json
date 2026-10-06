@@ -63,6 +63,19 @@
     "placeholder": "为这条记录添加备注...",
     "title": "编辑备注"
   },
+  "ordering": {
+    "positionLabel": "位置",
+    "positionPlaceholder": "输入序号",
+    "positionTitle": "移动到指定位置"
+  },
+  "pinnedPanel": {
+    "empty": "暂无置顶内容",
+    "moveFirst": "移到最前",
+    "moveLast": "移到最后",
+    "moveTo": "移动到指定位置…",
+    "title": "置顶",
+    "unpin": "取消置顶"
+  },
   "quickActions": {
     "copy": "复制",
     "copyPlain": "复制为纯文本",
@@ -112,18 +125,5 @@
     "rtf": "RTF",
     "text": "文本",
     "url": "链接"
-  },
-  "ordering": {
-    "positionTitle": "移动到指定位置",
-    "positionLabel": "位置",
-    "positionPlaceholder": "输入序号"
-  },
-  "pinnedPanel": {
-    "title": "置顶",
-    "empty": "暂无置顶内容",
-    "moveFirst": "移到最前",
-    "moveLast": "移到最后",
-    "moveTo": "移动到指定位置…",
-    "unpin": "取消置顶"
   }
 }
