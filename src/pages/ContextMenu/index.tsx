@@ -93,10 +93,14 @@ const ContextMenu: FC = () => {
   const handlePick = async (action: ClipboardAction) => {
     if (!payload) return;
 
-    await emitTo(WINDOW_LABEL.CLIPBOARD, TAURI_EVENT.CLIPBOARD_MENU_ACTION, {
-      action,
-      itemId: payload.itemId,
-    });
+    await emitTo(
+      payload.targetWindowLabel,
+      TAURI_EVENT.CLIPBOARD_MENU_ACTION,
+      {
+        action,
+        itemId: payload.itemId,
+      },
+    );
 
     await hideContextMenus();
   };
@@ -130,6 +134,7 @@ const ContextMenu: FC = () => {
                   isDanger={item.action === "delete"}
                   itemId={payload.itemId}
                   key={item.action}
+                  targetWindowLabel={payload.targetWindowLabel}
                   label={item.label}
                   onCloseSubmenu={closeSubmenu}
                   onOpenSubmenu={openSubmenu}
@@ -152,6 +157,7 @@ interface ContextMenuItemProps {
   isDanger: boolean;
   itemId: string;
   label: string;
+  targetWindowLabel: string;
   onCloseSubmenu: () => void;
   onOpenSubmenu: (input: ShowContextSubmenuInput) => void;
   onPick: (action: ClipboardAction) => void;
@@ -169,6 +175,7 @@ const ContextMenuItem: FC<ContextMenuItemProps> = (props) => {
     isDanger,
     itemId,
     label,
+    targetWindowLabel,
     onCloseSubmenu,
     onOpenSubmenu,
     onPick,
@@ -199,6 +206,7 @@ const ContextMenuItem: FC<ContextMenuItemProps> = (props) => {
       },
       groups,
       itemId,
+      targetWindowLabel,
     });
   };
 
@@ -273,11 +281,15 @@ export const ContextSubmenu: FC = () => {
     const groupId = event.currentTarget.dataset.groupId;
     if (!groupId) return;
 
-    await emitTo(WINDOW_LABEL.CLIPBOARD, TAURI_EVENT.CLIPBOARD_MENU_ACTION, {
-      action: payload.action,
-      groupId,
-      itemId: payload.itemId,
-    });
+    await emitTo(
+      payload.targetWindowLabel,
+      TAURI_EVENT.CLIPBOARD_MENU_ACTION,
+      {
+        action: payload.action,
+        groupId,
+        itemId: payload.itemId,
+      },
+    );
 
     await hideContextMenus();
   };
