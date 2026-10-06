@@ -18,6 +18,7 @@ import {
 } from "@/commands";
 import { TAURI_EVENT } from "@/constants/events";
 import { useClipboardItems } from "@/hooks/useClipboardItems";
+import { useClipboardWindowEditableFocus } from "@/hooks/useClipboardWindowEditableFocus";
 import { useTauriListen } from "@/hooks/useTauriListen";
 import { settingsState } from "@/stores/settings";
 import type { ClipboardAction, ClipboardItem } from "@/types/clipboard";
@@ -38,6 +39,8 @@ const COLUMN_COUNT = 2;
  * 左键行为沿用主列表 autoPaste 设置，不引入拖动排序。
  */
 const PinnedPanel: FC = () => {
+  useClipboardWindowEditableFocus();
+
   const { t } = useTranslation("clipboard");
   const settings = useSnapshot(settingsState);
   const autoPaste = settings.clipboard.content.autoPaste;
