@@ -11,11 +11,14 @@ import { useTranslation } from "react-i18next";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { useSnapshot } from "valtio";
 import {
+  addClipboardItemToManualOrder,
   deleteClipboardItem,
   hideWindow,
   listClipboardGroups,
   openClipboardItemLink,
+  moveClipboardItemManualOrder,
   pasteClipboardItem,
+  removeClipboardItemFromManualOrder,
   revealClipboardItem,
   saveClipboardImageToFile,
   toggleClipboardItemFavorite,
@@ -57,6 +60,7 @@ import {
 } from "../hooks/useClipboardPreviewController";
 import ClipboardCard from "./cards/ClipboardCard";
 import NoteModal from "./NoteModal";
+import OrderPositionModal from "./OrderPositionModal";
 
 /** 前 10 项的快捷键：index 0-8 对应 1-9，index 9 对应 0 */
 const KEY_HINTS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
@@ -86,6 +90,7 @@ const List: FC = () => {
   const [isModifierPressed, setIsModifierPressed] = useState(false);
   const [customGroups, setCustomGroups] = useState<ClipboardGroupRecord[]>([]);
   const [noteTarget, setNoteTarget] = useState<ClipboardItem | null>(null);
+  const [orderTarget, setOrderTarget] = useState<ClipboardItem | null>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const isAtTopRef = useRef(true);
   const itemElementMapRef = useRef(new Map<string, HTMLDivElement>());
@@ -482,6 +487,39 @@ const List: FC = () => {
     reloadCurrentRange();
   };
 
+  const refreshManualOrder = async (
+    item: ClipboardItem,
+    action:
+      | "add"
+      | "remove"
+      | "first"
+      | "last"
+      | { position: number },
+  ) => {
+    if (action === "add") {
+      await addClipboardItemToManualOrder(item.id);
+    } else if (action === "remove") {
+      await removeClipboardItemFromManualOrder(item.id);
+    } else {
+      const position =
+        action === "first"
+          ? 1
+          : action === "last"
+            ? Number.MAX_SAFE_INTEGER
+            : action.position;
+      await moveClipboardItemManualOrder(item.id, position);
+    }
+
+    reloadCurrentRange();
+  };
+
+  const handleOrderPositionSubmit = async (position: number) => {
+    if (!orderTarget) return;
+
+    await refreshManualOrder(orderTarget, { position });
+    setOrderTarget(null);
+  };
+
   /**
    * 按当前条目后端声明的可用动作执行“打开”：链接 / 邮箱 / 定位文件共用 Cmd/Ctrl+O。
    */
@@ -557,6 +595,25 @@ const List: FC = () => {
         return;
       case "togglePinned":
         handleTogglePinned(target.id);
+        return;
+      case "addToRanking":
+        void refreshManualOrder(target, "add");
+        return;
+      case "moveRankingFirst":
+        void refreshManualOrder(target, "first");
+        return;
+      case "moveRankingLast":
+        void refreshManualOrder(target, "last");
+        return;
+      case "moveRankingToPosition":
+        setOrderTarget(target);
+        return;
+      case "removeFromRanking":
+        void refreshManualOrder(target, "remove");
+        return;
+      case "movePinnedFirst":
+      case "movePinnedLast":
+      case "movePinnedToPosition":
         return;
       case "moveToGroup":
         if (!targetGroupId) return;
@@ -807,6 +864,16 @@ const List: FC = () => {
         item={noteTarget}
         onClose={handleCloseNote}
         onSaved={handleNoteSaved}
+      />
+
+      <OrderPositionModal
+        currentPosition={orderTarget?.manualOrder ?? 1}
+        onCancel={() => {
+          setOrderTarget(null);
+        }}
+        onSubmit={handleOrderPositionSubmit}
+        open={orderTarget !== null}
+        title={t("ranking.moveToPositionTitle")}
       />
     </div>
   );
