@@ -77,7 +77,6 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
   const [hovered, setHovered] = useState(false);
   const body = renderBody(item, isLinkActive, onOpenLink);
   const showSensitiveIndicator = item.isSensitive && item.kind === "text";
-  const showStatusIndicators = item.isPinned || showSensitiveIndicator;
 
   const handleDragStart = async (event: DragEvent) => {
     event.preventDefault();
@@ -121,7 +120,6 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
         "relative flex flex-col gap-1 overflow-hidden rounded-2 border border-ant-border p-2 transition-colors duration-150 ease-out motion-reduce:transition-none",
         {
           "border-ant-primary bg-ant-blue-1": isSelected,
-          "border-ant-primary bg-ant-container": item.isPinned && !isSelected,
           "border-ant-warning bg-ant-warning-bg":
             item.priorityOrder !== null && !item.isPinned && !isSelected,
         },
@@ -174,9 +172,7 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
           body
         )}
       </div>
-      {showStatusIndicators
-        ? renderStatusIndicators(item.isPinned, showSensitiveIndicator)
-        : null}
+      {showSensitiveIndicator ? renderStatusIndicators() : null}
     </div>
   );
 };
@@ -184,15 +180,10 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
 /**
  * 渲染卡片右下角的状态水印；仅表达状态，不参与交互。
  */
-function renderStatusIndicators(isPinned: boolean, isSensitive: boolean) {
+function renderStatusIndicators() {
   return (
     <div className="pointer-events-none absolute right-2 bottom-2 flex items-end gap-1 text-ant-quaternary">
-      {isPinned ? (
-        <i aria-hidden="true" className="i-ph:push-pin-bold size-5" />
-      ) : null}
-      {isSensitive ? (
-        <i aria-hidden="true" className="i-lucide:key-round size-5" />
-      ) : null}
+      <i aria-hidden="true" className="i-lucide:key-round size-5" />
     </div>
   );
 }
