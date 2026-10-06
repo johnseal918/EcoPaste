@@ -20,6 +20,15 @@ export const isDev = import.meta.env.DEV;
 /**
  * 当前是否为 Windows 平台的剪贴板窗口（focusable=false，需要低级键盘钩子）。
  */
+export const isWinClipboardSurface = () => {
+  if (!isWin) return false;
+
+  const label = getCurrentWebviewWindow().label;
+
+  return label === WINDOW_LABEL.CLIPBOARD || label === WINDOW_LABEL.PINNED_PANEL;
+};
+
+/** 兼容既有调用：主剪贴板窗口判断仍保留。 */
 export const isWinClipboardWindow = () => {
   return isWin && getCurrentWebviewWindow().label === WINDOW_LABEL.CLIPBOARD;
 };
