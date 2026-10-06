@@ -1070,6 +1070,42 @@ export const toggleClipboardItemPinned = async (
   return next;
 };
 
+/** 把普通历史加入手动排序末尾。 */
+export const addClipboardItemPriority = (id: string) => {
+  return call<number>(
+    TAURI_COMMAND.ADD_CLIPBOARD_ITEM_PRIORITY,
+    "commands:labels.updateClipboardItem",
+    { id },
+  );
+};
+
+/** 移动普通手动排序项到指定位置。 */
+export const moveClipboardItemPriority = (id: string, position: number) => {
+  return call<number>(
+    TAURI_COMMAND.MOVE_CLIPBOARD_ITEM_PRIORITY,
+    "commands:labels.updateClipboardItem",
+    { id, position },
+  );
+};
+
+/** 取消普通历史手动排序。 */
+export const cancelClipboardItemPriority = (id: string) => {
+  return call<void>(
+    TAURI_COMMAND.CANCEL_CLIPBOARD_ITEM_PRIORITY,
+    "commands:labels.updateClipboardItem",
+    { id },
+  );
+};
+
+/** 移动置顶项到指定位置。 */
+export const movePinnedClipboardItem = (id: string, position: number) => {
+  return call<number>(
+    TAURI_COMMAND.MOVE_PINNED_CLIPBOARD_ITEM,
+    "commands:labels.updateClipboardItem",
+    { id, position },
+  );
+};
+
 /**
  * 删除条目；命令**不**广播 `clipboard://updated`，调用方需根据返回值本地移除该项。
  * 普通条目、收藏条目与置顶条目分别读取对应保护 / 确认开关。
