@@ -56,6 +56,7 @@ pub struct ShowContextSubmenuInput {
     pub anchor: ContextSubmenuAnchor,
     pub groups: Vec<ContextSubmenuGroupInput>,
     pub item_id: String,
+    pub target_window_label: String,
 }
 
 /// Returns the latest pending root context-menu payload for a freshly rebuilt window.
