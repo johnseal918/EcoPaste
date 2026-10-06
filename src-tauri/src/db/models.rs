@@ -262,4 +262,6 @@ pub struct ClipboardItemPage {
     pub list: Vec<ClipboardItem>,
     pub total: i64,
     pub has_more: bool,
+    /// 当前过滤结果中参与手动排序的条目数；主列表用它标记开头的排序项。
+    pub ordered_count: i64,
 }
