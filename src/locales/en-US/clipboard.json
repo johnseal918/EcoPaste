@@ -112,5 +112,12 @@
     "rtf": "RTF",
     "text": "Text",
     "url": "Link"
+  },
+  "ranking": {
+    "moveToPositionTitle": "Move to Position"
+  },
+  "pinnedPanel": {
+    "title": "Pinned",
+    "empty": "No pinned items"
   }
 }
