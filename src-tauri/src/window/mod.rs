@@ -151,15 +151,18 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
     let result = macos::show_window(app_handle, label);
     #[cfg(target_os = "windows")]
     let result = windows::show_window(app_handle, label);
-    if result.is_ok() && !delays_clipboard_visibility_event(label) {
+    if result.is_ok() {
         if label == CLIPBOARD_WINDOW_LABEL {
             preview::resume_after_clipboard_show();
             if let Err(err) = show_pinned_panel(app_handle) {
                 log::warn!("show pinned panel failed: {err}");
             }
         }
-        emit_visibility(app_handle, label, true);
-        lifecycle::on_shown(app_handle, label);
+
+        if !delays_clipboard_visibility_event(label) {
+            emit_visibility(app_handle, label, true);
+            lifecycle::on_shown(app_handle, label);
+        }
     }
     result
 }
