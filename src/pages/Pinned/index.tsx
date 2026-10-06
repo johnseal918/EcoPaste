@@ -68,7 +68,6 @@ const PinnedPanel: FC = () => {
     getItem,
     loadRange,
     loadedInitial,
-    loading,
     reload,
     reloadCurrentRange,
     total,
@@ -232,7 +231,7 @@ const PinnedPanel: FC = () => {
       </div>
 
       <div className="min-h-0 flex-1">
-        {!loadedInitial || loading ? (
+        {!loadedInitial ? (
           <div className="flex size-full items-center justify-center">
             <Spin />
           </div>
@@ -250,6 +249,7 @@ const PinnedPanel: FC = () => {
             rangeChanged={(range) => {
               loadRange(range.startIndex, range.endIndex);
             }}
+            style={{ height: "100%" }}
             totalCount={total}
           />
         )}
