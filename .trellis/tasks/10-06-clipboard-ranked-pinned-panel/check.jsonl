@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/database-and-storage.md","reason":"Check migration safety, field coverage, ordering integrity, and updated_at semantics."}
+{"file":".trellis/spec/backend/settings-window-platform.md","reason":"Check companion window lifecycle and monitor-edge geometry."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Check compact card and panel UI implementation."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check interaction regressions and validation scope."}
