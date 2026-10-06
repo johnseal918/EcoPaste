@@ -119,7 +119,7 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
         {
           "border-ant-primary bg-ant-blue-1": isSelected,
           "border-ant-primary bg-ant-container": item.isPinned && !isSelected,
-          "bg-ant-blue-1/50": item.manualOrder !== null && !isSelected,
+          "bg-ant-blue-1": item.manualOrder !== null && !isSelected,
         },
       )}
       draggable
