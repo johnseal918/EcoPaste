@@ -36,14 +36,20 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn set_clipboard_window_editing(app_handle: &AppHandle, editing: bool) -> Result<()> {
-    let window = get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?;
+pub fn set_clipboard_window_editing(
+    app_handle: &AppHandle,
+    label: &str,
+    editing: bool,
+) -> Result<()> {
+    let window = get_window(app_handle, label)?;
     let raw_hwnd = window.hwnd().map_err(|e| anyhow::anyhow!(e))?;
     let hwnd = HWND(raw_hwnd.0 as isize);
 
     if editing {
         remember_pre_edit_foreground(hwnd);
-        keyboard::disable_navigation_keys();
+        if label == CLIPBOARD_WINDOW_LABEL {
+            keyboard::disable_navigation_keys();
+        }
         window.set_focusable(true).map_err(|e| anyhow::anyhow!(e))?;
         window.set_focus().map_err(|e| anyhow::anyhow!(e))?;
 
@@ -55,7 +61,7 @@ pub fn set_clipboard_window_editing(app_handle: &AppHandle, editing: bool) -> Re
         .set_focusable(false)
         .map_err(|e| anyhow::anyhow!(e))?;
 
-    if window.is_visible().unwrap_or(false) {
+    if label == CLIPBOARD_WINDOW_LABEL && window.is_visible().unwrap_or(false) {
         keyboard::enable_navigation_keys(app_handle);
         mouse::enable_outside_click_hide(app_handle);
     }
