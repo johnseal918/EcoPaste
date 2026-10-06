@@ -1171,7 +1171,7 @@ async fn merge_items(
 ) -> Result<MergeOutcome> {
     let rows = sqlx::query_as::<_, BackupItemRow>(
         "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-         summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
+         summary, file_types, size, width, height, use_count, is_favorite, is_pinned, priority_order, pin_order, is_sensitive, platform, note, \
          created_at, updated_at FROM clipboard_items ORDER BY created_at ASC",
     )
     .fetch_all(backup)
@@ -1197,9 +1197,9 @@ async fn merge_items(
         sqlx::query(
             "INSERT OR IGNORE INTO clipboard_items \
              (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-              summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
+              summary, file_types, size, width, height, use_count, is_favorite, is_pinned, priority_order, pin_order, is_sensitive, platform, note, \
               created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(row.id)
         .bind(row.kind)
@@ -1217,6 +1217,8 @@ async fn merge_items(
         .bind(row.use_count)
         .bind(row.is_favorite)
         .bind(row.is_pinned)
+        .bind(row.priority_order)
+        .bind(row.pin_order)
         .bind(row.is_sensitive)
         .bind(row.platform)
         .bind(row.note)
@@ -1252,6 +1254,8 @@ struct BackupItemRow {
     use_count: i64,
     is_favorite: bool,
     is_pinned: bool,
+    priority_order: Option<i64>,
+    pin_order: Option<i64>,
     is_sensitive: bool,
     platform: String,
     note: Option<String>,
