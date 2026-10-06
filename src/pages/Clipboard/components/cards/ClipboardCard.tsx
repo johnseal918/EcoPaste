@@ -47,7 +47,7 @@ interface ClipboardCardProps {
 }
 
 /**
- * 按 `kind` 分发到具体卡片组件，统一外层 padding / 时间戳 / 来源应用图标。
+ * 按 `kind` 分发到具体卡片组件，统一外层 padding、时间戳与状态标识。
  * `isSelected` 为 true 时高亮背景与边框；指针事件由列表注入用于 hover preview；
  * 右键根节点弹出 Rust 端原生菜单（避免 tauri-apps/tauri#9470 的 muda use-after-free），
  * 点击菜单项后由列表层订阅 `clipboard://menu-action` 派发到实际处理逻辑。
@@ -163,6 +163,16 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
       ) : (
         body
       )}
+      {item.isPinned && item.pinOrder !== null ? (
+        <span className="pointer-events-none absolute bottom-2 left-2 inline-flex min-w-5 items-center justify-center rounded-full bg-ant-primary px-1 text-ant-light-solid text-xs">
+          {item.pinOrder}
+        </span>
+      ) : null}
+      {!item.isPinned && item.manualOrder !== null ? (
+        <span className="pointer-events-none absolute bottom-2 left-2 inline-flex min-w-5 items-center justify-center rounded-full bg-ant-primary px-1 text-ant-light-solid text-xs">
+          {item.manualOrder}
+        </span>
+      ) : null}
       {showStatusIndicators
         ? renderStatusIndicators(item.isPinned, showSensitiveIndicator)
         : null}
