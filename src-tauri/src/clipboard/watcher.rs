@@ -16,10 +16,10 @@ use chrono::Utc;
 #[cfg(target_os = "macos")]
 use clipboard_rs::{ClipboardHandler, ClipboardWatcher, ClipboardWatcherContext};
 use serde_json::json;
-#[cfg(target_os = "windows")]
-use winapi::um::winuser::GetClipboardSequenceNumber;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager};
+#[cfg(target_os = "windows")]
+use winapi::um::winuser::GetClipboardSequenceNumber;
 
 use super::app_store::AppIconStore;
 use super::apps_registry::AppsRegistry;
@@ -302,14 +302,7 @@ fn spawn_watch_thread(
                 let sequence = unsafe { GetClipboardSequenceNumber() };
                 if sequence != 0 && sequence != last_sequence {
                     last_sequence = sequence;
-                    capture_and_enqueue(
-                        &reader,
-                        &app,
-                        &guard,
-                        &store,
-                        &app_icon_store,
-                        &registry,
-                    );
+                    capture_and_enqueue(&reader, &app, &guard, &store, &app_icon_store, &registry);
                     burst_until = Some(std::time::Instant::now() + WINDOWS_BURST_WINDOW);
                 }
 
