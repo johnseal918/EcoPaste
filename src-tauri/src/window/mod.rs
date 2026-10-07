@@ -201,7 +201,7 @@ pub fn set_clipboard_side_panel_open(
             current.retain(|candidate| *candidate != panel);
         }
 
-        *current = ordered_side_panels(&order, current);
+        *current = ordered_side_panels(&order, &current);
     }
 
     apply_side_panels_visibility(app_handle)?;
