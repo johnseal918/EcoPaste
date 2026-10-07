@@ -25,3 +25,10 @@ Add `clipboard-pinned` webview route/window. It is shown/hidden with the main cl
 The OS clipboard callback performs only: lightweight foreground-app identity lookup, exclusion check, settings snapshot, bounded clipboard read, and capture timestamp. It then returns to the platform watcher.
 
 Item construction (including image persistence), writeback-loop suppression, app icon extraction/materialization, and database persistence execute off the watcher thread. Captured timestamps are copied onto the eventual item so concurrent background preparation cannot reorder history by processing latency.
+
+## Multi side-panel architecture
+The existing right companion WebView remains a single host window, but it renders multiple independent panel columns. This avoids multiplying Windows DWM gaps and keeps alignment/movement atomic with the main window.
+
+Rust owns only ephemeral current-session open state. Persistent configuration lives in Settings as sidePanels.order and sidePanels.alwaysShow. On main-window show, Rust restores only alwaysShow panels; on hide it clears the ephemeral open set. Toolbar toggles call a Rust command that changes the current open set and resizes/shows/hides the companion host.
+
+The host width is derived from the number of open panels. Per-panel width is allowed to shrink within a bounded range when monitor space is constrained. React renders open panels in the persisted order and swaps that order when the user moves a visible panel left/right.
