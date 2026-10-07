@@ -66,9 +66,9 @@ export const TAURI_COMMAND = {
   REVEAL_CLIPBOARD_ITEM: "reveal_clipboard_item",
   SAVE_CLIPBOARD_IMAGE_TO_FILE: "save_clipboard_image_to_file",
   SET_AUTOSTART: "set_autostart",
+  SET_CLIPBOARD_SIDE_PANEL_OPEN: "set_clipboard_side_panel_open",
   SET_CLIPBOARD_WINDOW_AUTO_HIDE_SUSPENDED:
     "set_clipboard_window_auto_hide_suspended",
-  SET_CLIPBOARD_SIDE_PANEL_OPEN: "set_clipboard_side_panel_open",
   SET_CLIPBOARD_WINDOW_EDITING: "set_clipboard_window_editing",
   SET_CLIPBOARD_WINDOW_PINNED: "set_clipboard_window_pinned",
   SET_ONBOARDING_STEP: "set_onboarding_step",
