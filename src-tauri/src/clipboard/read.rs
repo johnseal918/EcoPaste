@@ -7,9 +7,9 @@
 //! 仅当源是 TIFF/DIB 等非 PNG 时才回退到库的解码 + 重编码 PNG。
 
 use clipboard_rs::common::RustImage;
-use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
 #[cfg(target_os = "windows")]
 use clipboard_rs::ClipboardContent;
+use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
 
 use super::payload::{ClipboardPayload, ImagePayload, TextPayload};
 use crate::core::{AppError, Result};
