@@ -23,7 +23,11 @@ import type {
   ClipboardSubKind,
   UpdateNoteResult,
 } from "@/types/clipboard";
-import type { Settings, SettingsPatch } from "@/types/settings";
+import type {
+  Settings,
+  SettingsPatch,
+  SidePanelKind,
+} from "@/types/settings";
 import { getMessageApi, getModalApi } from "@/utils/feedback";
 import { log } from "@/utils/log";
 import { confirmClearClipboardItems } from "./confirmClearClipboardItems";
@@ -254,6 +258,10 @@ export interface AppUpdateStatus {
   update: UpdateMetadata | null;
 }
 
+export interface ClipboardSidePanelsRuntimeState {
+  open: SidePanelKind[];
+}
+
 export interface AdminLaunchStatus {
   configured: boolean;
   runningAsAdmin: boolean;
@@ -334,6 +342,24 @@ const call = async <T>(
 /**
  * 拉取设置首屏快照；后续刷新走 `settings://updated` 事件。
  */
+export const getClipboardSidePanelsState = () => {
+  return call<ClipboardSidePanelsRuntimeState>(
+    TAURI_COMMAND.GET_CLIPBOARD_SIDE_PANELS_STATE,
+    "commands:labels.openWindow",
+  );
+};
+
+export const setClipboardSidePanelOpen = (
+  panel: SidePanelKind,
+  open: boolean,
+) => {
+  return call<ClipboardSidePanelsRuntimeState>(
+    TAURI_COMMAND.SET_CLIPBOARD_SIDE_PANEL_OPEN,
+    "commands:labels.openWindow",
+    { panel, open },
+  );
+};
+
 export const getSettings = () => {
   return call<Settings>(
     TAURI_COMMAND.GET_SETTINGS,
