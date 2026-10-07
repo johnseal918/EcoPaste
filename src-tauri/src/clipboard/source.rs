@@ -12,6 +12,14 @@ use std::path::PathBuf;
 use crate::db::models::Platform;
 
 #[derive(Debug, Clone)]
+pub enum FrontmostHint {
+    #[cfg(target_os = "macos")]
+    Mac(FrontmostApp),
+    #[cfg(target_os = "windows")]
+    WindowsPid(u32),
+}
+
+#[derive(Debug, Clone)]
 pub struct FrontmostApp {
     /// 稳定主键。macOS = bundle id（如 `com.apple.Safari`），Windows = exe 绝对路径。
     pub id: String,
@@ -22,20 +30,37 @@ pub struct FrontmostApp {
     pub icon_path: Option<PathBuf>,
 }
 
-/// 探测当前前台应用。失败不报错，只在 trace 级别记日志（监听回调高频，避免噪声）。
-pub fn detect_frontmost() -> Option<FrontmostApp> {
+/// 在剪贴板事件刚到达时抓一个尽可能轻量的来源提示。
+/// Windows 只取前台窗口 PID，不做 OpenProcess/路径查询；昂贵解析放到后台。
+pub fn capture_frontmost_hint() -> Option<FrontmostHint> {
     #[cfg(target_os = "macos")]
     {
-        macos::detect()
+        macos::detect().map(FrontmostHint::Mac)
     }
     #[cfg(target_os = "windows")]
     {
-        windows::detect()
+        windows::capture_pid().map(FrontmostHint::WindowsPid)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         None
     }
+}
+
+/// 把轻量来源提示解析成稳定应用信息。这个函数允许放到后台线程执行。
+pub fn resolve_frontmost_hint(hint: FrontmostHint) -> Option<FrontmostApp> {
+    match hint {
+        #[cfg(target_os = "macos")]
+        FrontmostHint::Mac(app) => Some(app),
+        #[cfg(target_os = "windows")]
+        FrontmostHint::WindowsPid(pid) => windows::from_pid(pid),
+    }
+}
+
+/// 兼容其它调用点的一步式探测；监听热路径应优先使用
+/// capture_frontmost_hint + resolve_frontmost_hint 两阶段方式。
+pub fn detect_frontmost() -> Option<FrontmostApp> {
+    capture_frontmost_hint().and_then(resolve_frontmost_hint)
 }
 
 #[cfg(target_os = "macos")]
@@ -94,10 +119,22 @@ mod windows {
     use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
     use winapi::um::winuser::{GetForegroundWindow, GetWindowThreadProcessId};
 
-    pub(super) fn detect() -> Option<FrontmostApp> {
-        let exe_path = unsafe { foreground_exe_path() }?;
-        // 自身写回事件依赖 WritebackGuard 的 content_hash 判定，这里不过滤自身——
-        // 与 macOS 行为一致：哪怕拿到的是 EcoPaste 自己，guard 也会在下游 short-circuit。
+    pub(super) fn capture_pid() -> Option<DWORD> {
+        let hwnd: HWND = unsafe { GetForegroundWindow() };
+        if hwnd.is_null() {
+            return None;
+        }
+
+        let mut pid: DWORD = 0;
+        unsafe {
+            GetWindowThreadProcessId(hwnd, &mut pid);
+        }
+        (pid != 0).then_some(pid)
+    }
+
+    pub(super) fn from_pid(pid: DWORD) -> Option<FrontmostApp> {
+        let exe_path = unsafe { process_exe_path(pid) }?;
+        // 自身写回事件依赖 WritebackGuard 的 content_hash 判定，这里不过滤自身。
         let name = Path::new(&exe_path)
             .file_stem()
             .and_then(|s| s.to_str())
@@ -113,16 +150,7 @@ mod windows {
         })
     }
 
-    unsafe fn foreground_exe_path() -> Option<String> {
-        let hwnd: HWND = GetForegroundWindow();
-        if hwnd.is_null() {
-            return None;
-        }
-        let mut pid: DWORD = 0;
-        GetWindowThreadProcessId(hwnd, &mut pid);
-        if pid == 0 {
-            return None;
-        }
+    unsafe fn process_exe_path(pid: DWORD) -> Option<String> {
         // PROCESS_QUERY_LIMITED_INFORMATION 足够 QueryFullProcessImageNameW，且不需要管理员权限。
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
         if handle.is_null() {
