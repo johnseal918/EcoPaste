@@ -268,8 +268,8 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
             log::warn!("center onboarding window failed: {err}");
         }
     } else if !was_visible {
-            // 次级窗口（如 preference）：只在从隐藏态打开时恢复位置 + 尺寸。
-            // 已可见窗口可能刚被用户移动但尚未落盘，重复恢复会把窗口拉回旧位置。
+        // 次级窗口（如 preference）：只在从隐藏态打开时恢复位置 + 尺寸。
+        // 已可见窗口可能刚被用户移动但尚未落盘，重复恢复会把窗口拉回旧位置。
         if let Err(err) = state::restore_window_state(app_handle, label) {
             log::warn!("restore window state failed for {label}: {err}");
         }
