@@ -189,6 +189,9 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
         <div className="ml-auto flex shrink-0 items-center gap-1">
           <Tooltip title={t("sidePanels.alwaysShow")}>
             <div className="flex items-center gap-1">
+              <span className="whitespace-nowrap text-ant-secondary text-xs">
+                {t("sidePanels.alwaysShow")}
+              </span>
               <Switch
                 checked={alwaysShow}
                 onChange={(checked) => {
