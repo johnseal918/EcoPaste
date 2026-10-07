@@ -7,7 +7,9 @@
 //! 仅当源是 TIFF/DIB 等非 PNG 时才回退到库的解码 + 重编码 PNG。
 
 use clipboard_rs::common::RustImage;
-use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext, ContentFormat};
+use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
+#[cfg(target_os = "windows")]
+use clipboard_rs::ClipboardContent;
 
 use super::payload::{ClipboardPayload, ImagePayload, TextPayload};
 use crate::core::{AppError, Result};
@@ -212,10 +214,12 @@ fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 
 /// 仅当 `available` 时读取，读取失败或空串都归并为 `None`，
 /// 让「格式存在但内容为空」与「格式不存在」对下游表现一致。
+#[cfg(target_os = "windows")]
 fn non_empty_string(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
+#[cfg(not(target_os = "windows"))]
 fn read_optional(
     available: bool,
     read: impl FnOnce() -> clipboard_rs::common::Result<String>,
