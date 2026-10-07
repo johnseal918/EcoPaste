@@ -81,10 +81,7 @@ const PinnedPanel: FC = () => {
     });
   };
 
-  const handleToggleAlwaysShow = (
-    kind: SidePanelKind,
-    enabled: boolean,
-  ) => {
+  const handleToggleAlwaysShow = (kind: SidePanelKind, enabled: boolean) => {
     const current = [
       ...(settings.clipboard.sidePanels.alwaysShow as SidePanelKind[]),
     ];
