@@ -32,3 +32,11 @@ Improve daily clipboard use without changing the primary left-click-to-paste hab
 - The watcher callback must freeze the current payload before slow image/app-icon/database work.
 - Repeated identical content continues to use the existing content-hash deduplication semantics.
 - Capture must remain automatic; no separate batch-mode toggle or drag workflow is introduced.
+
+## Multi side-panel host
+- The built-in Pinned, Favorites, Text, Image and Files buttons act as independent right-side panel toggles.
+- Any number of these panels may be open at the same time; there is no one-panel-only restriction.
+- Manual opening is session-only by default. When the main clipboard window hides, non-persistent open state is discarded.
+- Each panel has its own “Always show” switch. Only panels enabled there reopen automatically with the main clipboard window next time.
+- Users can reorder the currently visible panels. The order persists and is reused when panels are reopened.
+- The Add/custom-group controls remain main-list organization controls rather than side panels.
