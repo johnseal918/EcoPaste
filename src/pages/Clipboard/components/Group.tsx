@@ -113,7 +113,7 @@ const GROUP_SEPARATOR_MARGIN = 4;
  */
 const Group: FC = () => {
   const { t } = useTranslation(["clipboard", "common"]);
-  const { category, groupId, range } = useSnapshot(clipboardViewState);
+  const { groupId, range } = useSnapshot(clipboardViewState);
 
   const [customGroups, setCustomGroups] = useState<ClipboardGroupRecord[]>([]);
   const [openSidePanels, setOpenSidePanels] = useState<SidePanelKind[]>([]);
