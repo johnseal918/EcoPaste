@@ -9,3 +9,5 @@
 8. Add focused Rust/frontend tests where existing test structure supports them; run lint/cargo tests/build in CI or local checkout.
 
 9. Make the clipboard watcher burst-safe by freezing payloads immediately and deferring heavy item/icon/persistence work off the watcher callback; preserve event-time ordering and existing deduplication/writeback suppression semantics.
+
+10. Convert the dedicated pinned companion into a multi side-panel host for pinned/favorite/text/image/files; add session-only open state, per-panel Always Show persistence, toolbar toggles, persistent panel ordering, dynamic companion width, and per-panel independent scrolling/content queries.
