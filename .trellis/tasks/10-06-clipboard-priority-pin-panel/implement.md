@@ -7,3 +7,5 @@
 6. Add pinned-panel route/component/window and couple its show/hide/position to the main clipboard window.
 7. Extend Windows outside-click handling so the main + pinned panel behave as one clipboard surface.
 8. Add focused Rust/frontend tests where existing test structure supports them; run lint/cargo tests/build in CI or local checkout.
+
+9. Make the clipboard watcher burst-safe by freezing payloads immediately and deferring heavy item/icon/persistence work off the watcher callback; preserve event-time ordering and existing deduplication/writeback suppression semantics.
