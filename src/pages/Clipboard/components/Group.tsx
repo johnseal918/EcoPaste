@@ -10,6 +10,7 @@ import type {
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSnapshot } from "valtio";
+import type { ClipboardSidePanelsRuntimeState } from "@/commands";
 import {
   createClipboardGroup,
   deleteClipboardGroup,
@@ -38,7 +39,6 @@ import type {
 } from "@/types/clipboard";
 import type { SidePanelKind } from "@/types/settings";
 import { cn } from "@/utils/cn";
-import type { ClipboardSidePanelsRuntimeState } from "@/commands";
 import { getModalApi } from "@/utils/feedback";
 
 type GroupModalMode = "create" | "edit";
