@@ -115,6 +115,24 @@
     "switchCustomGroup": "Switch custom group",
     "toggleRange": "Toggle all / favorites"
   },
+  "sidePanels": {
+    "alwaysShow": "Always show",
+    "close": "Close panel",
+    "empty": {
+      "favorite": "No favorites",
+      "files": "No files",
+      "image": "No images",
+      "pinned": "No pinned items",
+      "text": "No text items"
+    },
+    "favorite": "Favorites",
+    "files": "Files",
+    "image": "Images",
+    "moveLeft": "Move left",
+    "moveRight": "Move right",
+    "pinned": "Pinned",
+    "text": "Text"
+  },
   "types": {
     "color": "Color",
     "email": "Email",
