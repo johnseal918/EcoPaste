@@ -536,50 +536,24 @@ const Group: FC = () => {
   };
 
   /**
-   * 渲染范围按钮。
+   * “全部”保留为主列表复位按钮；收藏/文本/图片/文件改由副面板开关承接。
    */
   const renderRangeButton = ({ labelKey, value, icon }: RangeGroupOption) => {
-    return renderFilterButton({
-      icon,
-      label: t(`clipboard:${labelKey}`),
-      selected: range === value,
-      type: "range",
-      value,
-    });
-  };
-
-  /**
-   * 渲染单个筛选按钮。
-   */
-  const renderFilterButton = (options: {
-    icon: ClipboardGroupIconValue;
-    label: string;
-    selected: boolean;
-    showShortcutHint?: boolean;
-    type: "category" | "range";
-    value: ClipboardCategory | ClipboardRange;
-  }) => {
-    const { icon, label, selected, showShortcutHint, type, value } = options;
+    const selected = range === value;
 
     return (
-      <Tooltip key={`${type}:${value}`} title={label}>
+      <Tooltip key={value} title={t(`clipboard:${labelKey}`)}>
         <button
           className={cn(GROUP_ICON_BUTTON_CLASS, {
             "bg-ant-primary text-ant-light-solid": selected,
             "text-ant-secondary hover:bg-ant-fill-tertiary": !selected,
           })}
-          data-type={type}
+          data-type="range"
           data-value={value}
           onClick={handleGroupClick}
           type="button"
         >
-          {showShortcutHint ? (
-            <KeyHint hintKey="Q">
-              <ClipboardGroupIcon icon={icon} selected={selected} />
-            </KeyHint>
-          ) : (
-            <ClipboardGroupIcon icon={icon} selected={selected} />
-          )}
+          <ClipboardGroupIcon icon={icon} selected={selected} />
         </button>
       </Tooltip>
     );
