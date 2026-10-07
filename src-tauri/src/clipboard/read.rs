@@ -7,7 +7,7 @@
 //! 仅当源是 TIFF/DIB 等非 PNG 时才回退到库的解码 + 重编码 PNG。
 
 use clipboard_rs::common::RustImage;
-use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
+use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext, ContentFormat};
 
 use super::payload::{ClipboardPayload, ImagePayload, TextPayload};
 use crate::core::{AppError, Result};
@@ -51,7 +51,7 @@ impl ClipboardReader {
                 }
                 CaptureKind::Html | CaptureKind::Rtf | CaptureKind::Text => {
                     if text_payload.is_none() {
-                        text_payload = Some(self.read_text_payload()?);
+                        text_payload = Some(self.read_text_payload(capture)?);
                     }
 
                     let Some(text) = text_payload.as_ref().and_then(|payload| payload.as_ref())
@@ -90,10 +90,46 @@ impl ClipboardReader {
     }
 
     /// 读取剪贴板中的文本族表示，包含纯文本、HTML 和 RTF。
-    fn read_text_payload(&self) -> Result<Option<TextPayload>> {
+    ///
+    /// Windows 走 Clipboard::get 批量读取：clipboard-rs 会只 OpenClipboard 一次，
+    /// 然后在同一个锁内把需要的表示全部拷出。相比逐个 has/get，连续复制时更快，
+    /// 也避免同一次记录的 plain/html/rtf 跨越两次系统剪贴板版本。
+    #[cfg(target_os = "windows")]
+    fn read_text_payload(&self, capture: &Capture) -> Result<Option<TextPayload>> {
+        let mut formats = vec![ContentFormat::Text];
+        if capture.html {
+            formats.push(ContentFormat::Html);
+        }
+        if capture.rtf {
+            formats.push(ContentFormat::Rtf);
+        }
+
+        let contents = self.ctx.get(&formats).map_err(clip_err)?;
+        let mut text = String::new();
+        let mut html = None;
+        let mut rtf = None;
+
+        for content in contents {
+            match content {
+                ClipboardContent::Text(value) => text = value,
+                ClipboardContent::Html(value) => html = non_empty_string(value),
+                ClipboardContent::Rtf(value) => rtf = non_empty_string(value),
+                _ => {}
+            }
+        }
+
+        if text.is_empty() && html.is_none() && rtf.is_none() {
+            return Ok(None);
+        }
+
+        Ok(Some(TextPayload { text, html, rtf }))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn read_text_payload(&self, capture: &Capture) -> Result<Option<TextPayload>> {
         let has_text = self.ctx.has(ContentFormat::Text);
-        let has_html = self.ctx.has(ContentFormat::Html);
-        let has_rtf = self.ctx.has(ContentFormat::Rtf);
+        let has_html = capture.html && self.ctx.has(ContentFormat::Html);
+        let has_rtf = capture.rtf && self.ctx.has(ContentFormat::Rtf);
         if !has_text && !has_html && !has_rtf {
             return Ok(None);
         }
@@ -176,6 +212,10 @@ fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 
 /// 仅当 `available` 时读取，读取失败或空串都归并为 `None`，
 /// 让「格式存在但内容为空」与「格式不存在」对下游表现一致。
+fn non_empty_string(value: String) -> Option<String> {
+    (!value.is_empty()).then_some(value)
+}
+
 fn read_optional(
     available: bool,
     read: impl FnOnce() -> clipboard_rs::common::Result<String>,
