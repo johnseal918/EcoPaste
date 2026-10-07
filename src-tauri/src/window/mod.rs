@@ -249,8 +249,12 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
         }
     }
 
+    let was_visible = get_window(app_handle, label)?.is_visible().unwrap_or(false);
+
     if label == CLIPBOARD_WINDOW_LABEL {
-        restore_always_show_side_panels(app_handle);
+        if !was_visible {
+            restore_always_show_side_panels(app_handle);
+        }
         if let Err(err) = apply_clipboard_window_layout(app_handle) {
             log::warn!("apply clipboard window layout failed: {err}");
         }
@@ -263,15 +267,11 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
         if let Err(err) = position_window(app_handle, label, WindowPosition::Center) {
             log::warn!("center onboarding window failed: {err}");
         }
-    } else {
-        let visible = get_window(app_handle, label)?.is_visible().unwrap_or(false);
-
-        if !visible {
+    } else if !was_visible {
             // 次级窗口（如 preference）：只在从隐藏态打开时恢复位置 + 尺寸。
             // 已可见窗口可能刚被用户移动但尚未落盘，重复恢复会把窗口拉回旧位置。
-            if let Err(err) = state::restore_window_state(app_handle, label) {
-                log::warn!("restore window state failed for {label}: {err}");
-            }
+        if let Err(err) = state::restore_window_state(app_handle, label) {
+            log::warn!("restore window state failed for {label}: {err}");
         }
     }
 
