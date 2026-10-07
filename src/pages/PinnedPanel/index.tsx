@@ -15,7 +15,10 @@ import {
 import ClipboardGroupIcon from "@/components/ClipboardGroupIcon";
 import Tooltip from "@/components/Tooltip";
 import { TAURI_EVENT } from "@/constants/events";
-import { SIDE_PANEL_DEFINITIONS, SIDE_PANEL_KINDS } from "@/constants/sidePanels";
+import {
+  SIDE_PANEL_DEFINITIONS,
+  SIDE_PANEL_KINDS,
+} from "@/constants/sidePanels";
 import { useClipboardItems } from "@/hooks/useClipboardItems";
 import { useClipboardWindowEditableFocus } from "@/hooks/useClipboardWindowEditableFocus";
 import { useTauriListen } from "@/hooks/useTauriListen";
