@@ -41,10 +41,12 @@ const CLIPBOARD_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_m
 
 /// Another clipboard listener can briefly hold the Windows clipboard open. Retry those read
 /// failures within a bounded window before dropping the update.
-const CLIPBOARD_READ_RETRY_DELAYS: [Duration; 3] = [
-    Duration::from_millis(15),
-    Duration::from_millis(35),
-    Duration::from_millis(75),
+const CLIPBOARD_READ_RETRY_DELAYS: [Duration; 5] = [
+    Duration::from_millis(1),
+    Duration::from_millis(2),
+    Duration::from_millis(4),
+    Duration::from_millis(8),
+    Duration::from_millis(16),
 ];
 
 fn read_with_retry<T, E>(
@@ -266,31 +268,9 @@ impl ClipboardHandler for ClipboardChangeHandler {
             return;
         }
 
-        // **先**抓前台应用：等异步入库再问，前台早就切回我们自己了。
-        // 自身写回的事件会在下方 guard 处被丢弃，但 detect 仍会无害地返回我们自己的 bundle id——
-        // 顺序换不得：guard 判定依赖 content_hash，必须先把 payload 读出来才能判，
-        // 而 read_all 期间用户可能已经切走前台。
-        let source = source::detect_frontmost();
-
-        // 用户在偏好里勾选了「过滤此应用」时，本次复制整条直接丢弃——不读取、不入库、不 emit。
-        // 提前到读 payload 前判定，省掉无效的 OS 调用 + 图片解码开销。
-        if let Some(src) = &source {
-            let excluded = self
-                .app
-                .try_state::<SettingsStore>()
-                .map(|s| {
-                    s.snapshot()
-                        .clipboard
-                        .filters
-                        .excluded_app_ids
-                        .iter()
-                        .any(|id| id == &src.id)
-                })
-                .unwrap_or(false);
-            if excluded {
-                return;
-            }
-        }
+        // 先抓极轻量来源提示：Windows 这里只取 PID，不做进程路径/图标 IO。
+        // 真正解析来源与过滤规则放到后台，避免阻塞下一条 WM_CLIPBOARDUPDATE。
+        let source_hint = source::capture_frontmost_hint();
 
         let settings = self
             .app
@@ -343,6 +323,19 @@ impl ClipboardHandler for ClipboardChangeHandler {
                 // 自身写回触发的变更：后台判定并跳过，既避免回环，也不阻塞下一次复制事件。
                 if guard.should_skip(&item.content_hash) {
                     return None;
+                }
+
+                let source = source_hint.and_then(source::resolve_frontmost_hint);
+                if let Some(src) = &source {
+                    if settings
+                        .clipboard
+                        .filters
+                        .excluded_app_ids
+                        .iter()
+                        .any(|id| id == &src.id)
+                    {
+                        return None;
+                    }
                 }
 
                 let source_app =
