@@ -154,6 +154,8 @@ pub fn run() {
             commands::finish_onboarding,
             commands::detect_legacy_data,
             commands::import_legacy_data,
+            commands::get_clipboard_side_panels_state,
+            commands::set_clipboard_side_panel_open,
             commands::show_taskbar_icon,
             commands::position_window,
             commands::set_clipboard_window_pinned,
