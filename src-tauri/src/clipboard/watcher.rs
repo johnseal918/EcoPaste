@@ -13,8 +13,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+#[cfg(target_os = "macos")]
 use clipboard_rs::{ClipboardHandler, ClipboardWatcher, ClipboardWatcherContext};
 use serde_json::json;
+#[cfg(target_os = "windows")]
+use winapi::um::winuser::GetClipboardSequenceNumber;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -37,7 +40,19 @@ pub const CLIPBOARD_UPDATED_EVENT: &str = "clipboard://updated";
 /// macOS 轮询 `changeCount` 的间隔。上游 clipboard-rs 默认 500ms，对复制响应（尤其图片）
 /// 偏慢；我们 fork 出 `new_with_interval` 后调到 120ms，跟手且 CPU 开销可忽略。
 /// Windows 走事件驱动（`WM_CLIPBOARDUPDATE`），此值被忽略。
+#[cfg(target_os = "macos")]
 const CLIPBOARD_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(120);
+
+/// Windows 不再依赖消息处理完成速度来决定何时读剪贴板：直接盯 sequence number。
+/// 空闲时 8ms 已远快于人工连续 Ctrl+C；检测到一次变化后 2 秒内进入 1ms burst 模式，
+/// 把下一次复制覆盖前的读取窗口压到最小。这里只做 GetClipboardSequenceNumber + sleep，
+/// 没有 DB / 图标 / WebView 工作。
+#[cfg(target_os = "windows")]
+const WINDOWS_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(8);
+#[cfg(target_os = "windows")]
+const WINDOWS_BURST_POLL_INTERVAL: Duration = Duration::from_millis(1);
+#[cfg(target_os = "windows")]
+const WINDOWS_BURST_WINDOW: Duration = Duration::from_secs(2);
 
 /// Another clipboard listener can briefly hold the Windows clipboard open. Retry those read
 /// failures within a bounded window before dropping the update.
@@ -205,6 +220,7 @@ pub fn init(app: &AppHandle) -> crate::core::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn spawn_watch_thread(
     app: AppHandle,
     guard: Arc<WritebackGuard>,
@@ -216,7 +232,6 @@ fn spawn_watch_thread(
     std::thread::Builder::new()
         .name("clipboard-watcher".to_owned())
         .spawn(move || {
-            // 平台剪贴板句柄在本线程内构造，不跨线程移动。
             let reader = match ClipboardReader::new() {
                 Ok(reader) => reader,
                 Err(err) => {
@@ -245,12 +260,71 @@ fn spawn_watch_thread(
             });
 
             log::info!("clipboard watcher started");
-            // 阻塞直至进程退出。
             watcher.start_watch();
         })
         .expect("failed to spawn clipboard watcher thread");
 }
 
+#[cfg(target_os = "windows")]
+fn spawn_watch_thread(
+    app: AppHandle,
+    guard: Arc<WritebackGuard>,
+    store: ImageStore,
+    app_icon_store: AppIconStore,
+    registry: AppsRegistry,
+    pause: WatcherPause,
+) {
+    std::thread::Builder::new()
+        .name("clipboard-sequence-watcher".to_owned())
+        .spawn(move || {
+            let reader = match ClipboardReader::new() {
+                Ok(reader) => reader,
+                Err(err) => {
+                    log::error!("clipboard sequence watcher: failed to create reader: {err}");
+                    return;
+                }
+            };
+
+            let mut last_sequence = unsafe { GetClipboardSequenceNumber() };
+            let mut burst_until: Option<std::time::Instant> = None;
+
+            log::info!("clipboard Windows sequence watcher started");
+
+            loop {
+                if pause.is_paused() {
+                    // 暂停期间只追上当前 sequence，不补录暂停时发生的复制。
+                    last_sequence = unsafe { GetClipboardSequenceNumber() };
+                    burst_until = None;
+                    std::thread::sleep(Duration::from_millis(25));
+                    continue;
+                }
+
+                let sequence = unsafe { GetClipboardSequenceNumber() };
+                if sequence != 0 && sequence != last_sequence {
+                    last_sequence = sequence;
+                    capture_and_enqueue(
+                        &reader,
+                        &app,
+                        &guard,
+                        &store,
+                        &app_icon_store,
+                        &registry,
+                    );
+                    burst_until = Some(std::time::Instant::now() + WINDOWS_BURST_WINDOW);
+                }
+
+                let in_burst = burst_until.is_some_and(|until| std::time::Instant::now() < until);
+                std::thread::sleep(if in_burst {
+                    WINDOWS_BURST_POLL_INTERVAL
+                } else {
+                    WINDOWS_IDLE_POLL_INTERVAL
+                });
+            }
+        })
+        .expect("failed to spawn clipboard sequence watcher thread");
+}
+
+#[cfg(target_os = "macos")]
 struct ClipboardChangeHandler {
     reader: ClipboardReader,
     app: AppHandle,
@@ -261,109 +335,118 @@ struct ClipboardChangeHandler {
     pause: WatcherPause,
 }
 
+#[cfg(target_os = "macos")]
 impl ClipboardHandler for ClipboardChangeHandler {
     fn on_clipboard_change(&mut self) {
-        // 用户从托盘关掉「监听」时直接早退，不读取、不入库、不 emit。
         if self.pause.is_paused() {
             return;
         }
 
-        // 先抓极轻量来源提示：Windows 这里只取 PID，不做进程路径/图标 IO。
-        // 真正解析来源与过滤规则放到后台，避免阻塞下一条 WM_CLIPBOARDUPDATE。
-        let source_hint = source::capture_frontmost_hint();
+        capture_and_enqueue(
+            &self.reader,
+            &self.app,
+            &self.guard,
+            &self.store,
+            &self.app_icon_store,
+            &self.registry,
+        );
+    }
+}
 
-        let settings = self
-            .app
-            .try_state::<SettingsStore>()
-            .map(|s| s.snapshot())
-            .unwrap_or_default();
+fn capture_and_enqueue(
+    reader: &ClipboardReader,
+    app: &AppHandle,
+    guard: &Arc<WritebackGuard>,
+    store: &ImageStore,
+    app_icon_store: &AppIconStore,
+    registry: &AppsRegistry,
+) {
+    let settings = app
+        .try_state::<SettingsStore>()
+        .map(|s| s.snapshot())
+        .unwrap_or_default();
 
-        // 监听线程只负责尽快把“这一刻”的剪贴板内容冻结成 payload。
-        // 后续子类型识别、图片落盘、来源图标提取、DB 写入全部移出 watcher callback，
-        // 避免连续 Ctrl+C 时第 2/3/4 次内容在我们还处理上一条时被系统覆盖。
-        let payload = match read_with_retry(&CLIPBOARD_READ_RETRY_DELAYS, || {
-            self.reader.read_with_capture(&settings.clipboard.capture)
-        }) {
-            Ok(Some(payload)) => payload,
-            Ok(None) => return,
-            Err(err) => {
-                log::warn!("clipboard watcher: read failed: {err}");
-                return;
-            }
-        };
-        let captured_at = Utc::now();
+    // 第一优先级永远是冻结当前剪贴板；来源程序信息在成功读取后再抓。
+    let payload = match read_with_retry(&CLIPBOARD_READ_RETRY_DELAYS, || {
+        reader.read_with_capture(&settings.clipboard.capture)
+    }) {
+        Ok(Some(payload)) => payload,
+        Ok(None) => return,
+        Err(err) => {
+            log::warn!("clipboard watcher: read failed: {err}");
+            return;
+        }
+    };
+    let captured_at = Utc::now();
+    let source_hint = source::capture_frontmost_hint();
 
-        let app = self.app.clone();
-        let guard = self.guard.clone();
-        let store = self.store.clone();
-        let app_icon_store = self.app_icon_store.clone();
-        let registry = self.registry.clone();
-        tauri::async_runtime::spawn(async move {
-            let prepared = tauri::async_runtime::spawn_blocking(move || {
-                let mut item = match build_item_with_settings(
-                    &store,
-                    &payload,
-                    &settings.clipboard.capture,
-                    &settings.clipboard.sensitive,
-                    settings.clipboard.content.copy_plain,
-                ) {
-                    Ok(Some(item)) => item,
-                    Ok(None) => return None,
-                    Err(err) => {
-                        log::warn!("clipboard watcher: build item failed: {err}");
-                        return None;
-                    }
-                };
-
-                // 创建时间必须取 OS 事件回调中冻结 payload 的时刻，而不是后台任务完成时刻，
-                // 否则多条并行处理时会因为图标/图片耗时不同而打乱历史顺序。
-                item.created_at = captured_at;
-                item.updated_at = captured_at;
-
-                // 自身写回触发的变更：后台判定并跳过，既避免回环，也不阻塞下一次复制事件。
-                if guard.should_skip(&item.content_hash) {
+    let app = app.clone();
+    let guard = guard.clone();
+    let store = store.clone();
+    let app_icon_store = app_icon_store.clone();
+    let registry = registry.clone();
+    tauri::async_runtime::spawn(async move {
+        let prepared = tauri::async_runtime::spawn_blocking(move || {
+            let mut item = match build_item_with_settings(
+                &store,
+                &payload,
+                &settings.clipboard.capture,
+                &settings.clipboard.sensitive,
+                settings.clipboard.content.copy_plain,
+            ) {
+                Ok(Some(item)) => item,
+                Ok(None) => return None,
+                Err(err) => {
+                    log::warn!("clipboard watcher: build item failed: {err}");
                     return None;
                 }
-
-                let source = source_hint.and_then(source::resolve_frontmost_hint);
-                if let Some(src) = &source {
-                    if settings
-                        .clipboard
-                        .filters
-                        .excluded_app_ids
-                        .iter()
-                        .any(|id| id == &src.id)
-                    {
-                        return None;
-                    }
-                }
-
-                let source_app =
-                    source.map(|src| materialize_source(&app_icon_store, Some(&registry), src));
-                if let Some(src) = &source_app {
-                    item.source_app_id = Some(src.id.clone());
-                }
-
-                Some((item, source_app))
-            })
-            .await;
-
-            let Some((item, source_app)) = (match prepared {
-                Ok(prepared) => prepared,
-                Err(err) => {
-                    log::error!("clipboard watcher: background preparation task failed: {err}");
-                    None
-                }
-            }) else {
-                return;
             };
 
-            let pool = app.state::<crate::db::DatabaseState>().pool().await;
-            if let Err(err) = persist_and_notify(&app, &pool, &item, source_app.as_ref()).await {
-                log::error!("clipboard watcher: persist failed: {err}");
+            item.created_at = captured_at;
+            item.updated_at = captured_at;
+
+            if guard.should_skip(&item.content_hash) {
+                return None;
             }
-        });
-    }
+
+            let source = source_hint.and_then(source::resolve_frontmost_hint);
+            if let Some(src) = &source {
+                if settings
+                    .clipboard
+                    .filters
+                    .excluded_app_ids
+                    .iter()
+                    .any(|id| id == &src.id)
+                {
+                    return None;
+                }
+            }
+
+            let source_app =
+                source.map(|src| materialize_source(&app_icon_store, Some(&registry), src));
+            if let Some(src) = &source_app {
+                item.source_app_id = Some(src.id.clone());
+            }
+
+            Some((item, source_app))
+        })
+        .await;
+
+        let Some((item, source_app)) = (match prepared {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                log::error!("clipboard watcher: background preparation task failed: {err}");
+                None
+            }
+        }) else {
+            return;
+        };
+
+        let pool = app.state::<crate::db::DatabaseState>().pool().await;
+        if let Err(err) = persist_and_notify(&app, &pool, &item, source_app.as_ref()).await {
+            log::error!("clipboard watcher: persist failed: {err}");
+        }
+    });
 }
 
 #[cfg(test)]
