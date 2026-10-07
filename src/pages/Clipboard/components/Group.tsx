@@ -13,8 +13,10 @@ import { useSnapshot } from "valtio";
 import {
   createClipboardGroup,
   deleteClipboardGroup,
+  getClipboardSidePanelsState,
   listClipboardGroups,
   openPreferenceWithHighlight,
+  setClipboardSidePanelOpen,
   updateClipboardGroup,
 } from "@/commands";
 import ClipboardGroupIcon from "@/components/ClipboardGroupIcon";
@@ -23,6 +25,7 @@ import Dropdown, { type DropdownMenuItems } from "@/components/Dropdown";
 import KeyHint from "@/components/KeyHint";
 import Tooltip from "@/components/Tooltip";
 import { TAURI_EVENT } from "@/constants/events";
+import { SIDE_PANEL_DEFINITIONS } from "@/constants/sidePanels";
 import { useKeyboardEvent } from "@/hooks/useKeyboardEvent";
 import { useTauriListen } from "@/hooks/useTauriListen";
 import { clipboardViewState } from "@/stores/clipboardView";
@@ -33,7 +36,9 @@ import type {
   ClipboardGroupRecord,
   ClipboardRange,
 } from "@/types/clipboard";
+import type { SidePanelKind } from "@/types/settings";
 import { cn } from "@/utils/cn";
+import type { ClipboardSidePanelsRuntimeState } from "@/commands";
 import { getModalApi } from "@/utils/feedback";
 
 type GroupModalMode = "create" | "edit";
@@ -111,6 +116,7 @@ const Group: FC = () => {
   const { category, groupId, range } = useSnapshot(clipboardViewState);
 
   const [customGroups, setCustomGroups] = useState<ClipboardGroupRecord[]>([]);
+  const [openSidePanels, setOpenSidePanels] = useState<SidePanelKind[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<GroupModalMode>("create");
   const [visibleCustomGroupCount, setVisibleCustomGroupCount] = useState(
@@ -158,7 +164,17 @@ const Group: FC = () => {
    */
   useMount(() => {
     void loadGroups();
+    void getClipboardSidePanelsState().then((state) => {
+      setOpenSidePanels(state.open);
+    });
   });
+
+  useTauriListen<ClipboardSidePanelsRuntimeState>(
+    TAURI_EVENT.CLIPBOARD_SIDE_PANELS_UPDATED,
+    (event) => {
+      setOpenSidePanels(event.payload.open);
+    },
+  );
 
   /**
    * 其他窗口或命令修改分组后刷新本地列表。
@@ -215,6 +231,13 @@ const Group: FC = () => {
    */
   const toggleCustomGroup = (id: string) => {
     clipboardViewState.groupId = clipboardViewState.groupId === id ? null : id;
+  };
+
+  const toggleSidePanel = (kind: SidePanelKind) => {
+    const nextOpen = !openSidePanels.includes(kind);
+    void setClipboardSidePanelOpen(kind, nextOpen).then((state) => {
+      setOpenSidePanels(state.open);
+    });
   };
 
   /**
@@ -551,6 +574,34 @@ const Group: FC = () => {
   };
 
   /**
+   * 内置副面板开关。默认只控制当前这次打开；“始终显示”由右侧面板自身设置。
+   */
+  const renderSidePanelButton = ({
+    icon,
+    kind,
+    labelKey,
+  }: (typeof SIDE_PANEL_DEFINITIONS)[number]) => {
+    const selected = openSidePanels.includes(kind);
+
+    return (
+      <Tooltip key={kind} title={t(`clipboard:${labelKey}`)}>
+        <button
+          className={cn(GROUP_ICON_BUTTON_CLASS, {
+            "bg-ant-primary text-ant-light-solid": selected,
+            "text-ant-secondary hover:bg-ant-fill-tertiary": !selected,
+          })}
+          onClick={() => {
+            toggleSidePanel(kind);
+          }}
+          type="button"
+        >
+          <ClipboardGroupIcon icon={icon} selected={selected} />
+        </button>
+      </Tooltip>
+    );
+  };
+
+  /**
    * 渲染范围按钮。
    */
   const renderRangeButton = ({ labelKey, value, icon }: RangeGroupOption) => {
@@ -565,25 +616,6 @@ const Group: FC = () => {
       selected,
       showShortcutHint,
       type: "range",
-      value,
-    });
-  };
-
-  /**
-   * 渲染分类按钮。
-   */
-  const renderCategoryButton = ({
-    labelKey,
-    value,
-    icon,
-  }: CategoryGroupOption) => {
-    const selected = category === value;
-
-    return renderFilterButton({
-      icon,
-      label: t(`clipboard:${labelKey}`),
-      selected,
-      type: "category",
       value,
     });
   };
@@ -632,9 +664,11 @@ const Group: FC = () => {
         data-tauri-drag-region
         ref={toolbarRef}
       >
-        {RANGE_GROUP_OPTIONS.map(renderRangeButton)}
+        {RANGE_GROUP_OPTIONS.filter(({ value }) => {
+          return value === "all";
+        }).map(renderRangeButton)}
         <GroupSeparator />
-        {CATEGORY_GROUP_OPTIONS.map(renderCategoryButton)}
+        {SIDE_PANEL_DEFINITIONS.map(renderSidePanelButton)}
         <GroupSeparator separatorRef={customGroupAnchorRef} />
 
         {inlineCustomGroups.length > 0 && (
