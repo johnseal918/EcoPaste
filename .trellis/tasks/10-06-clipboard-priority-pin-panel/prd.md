@@ -26,3 +26,9 @@ Improve daily clipboard use without changing the primary left-click-to-paste hab
 - Pinned panel contains only pinned items, ordered by pin order.
 - Reordering compacts positions to 1..N with no gaps/duplicates.
 - Existing copy/paste/favorite/delete/note actions remain functional.
+
+## Burst-safe clipboard capture
+- Consecutive distinct clipboard changes must each be captured when Windows delivers the events and the clipboard can still be read.
+- The watcher callback must freeze the current payload before slow image/app-icon/database work.
+- Repeated identical content continues to use the existing content-hash deduplication semantics.
+- Capture must remain automatic; no separate batch-mode toggle or drag workflow is introduced.
