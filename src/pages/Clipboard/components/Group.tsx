@@ -31,7 +31,6 @@ import { useKeyboardEvent } from "@/hooks/useKeyboardEvent";
 import { useTauriListen } from "@/hooks/useTauriListen";
 import { clipboardViewState } from "@/stores/clipboardView";
 import type {
-  ClipboardCategory,
   ClipboardGroupIcon as ClipboardGroupIconValue,
   ClipboardGroupInput,
   ClipboardGroupRecord,
@@ -52,12 +51,6 @@ interface RangeGroupOption {
   icon: ClipboardGroupIconValue;
 }
 
-interface CategoryGroupOption {
-  labelKey: string;
-  value: ClipboardCategory;
-  icon: ClipboardGroupIconValue;
-}
-
 interface OverflowGroupMenuLabelProps {
   menuItems: DropdownMenuItems;
   onContext: (record: ClipboardGroupRecord) => void;
@@ -71,21 +64,6 @@ interface GroupSeparatorProps {
 
 const RANGE_GROUP_OPTIONS: RangeGroupOption[] = [
   { icon: "i-lets-icons:widget", labelKey: "groups.all", value: "all" },
-  {
-    icon: "i-lets-icons:star",
-    labelKey: "groups.favorite",
-    value: "favorite",
-  },
-];
-
-const CATEGORY_GROUP_OPTIONS: CategoryGroupOption[] = [
-  { icon: "i-lets-icons:file-dock", labelKey: "groups.text", value: "text" },
-  { icon: "i-lets-icons:img-box", labelKey: "groups.image", value: "image" },
-  {
-    icon: "i-lets-icons:folder-file-alt",
-    labelKey: "groups.files",
-    value: "files",
-  },
 ];
 
 const GROUP_MENU_ACTION = {
@@ -216,14 +194,10 @@ const Group: FC = () => {
    */
   const selectRange = (value: ClipboardRange) => {
     clipboardViewState.range = value;
-  };
-
-  /**
-   * 切换分类；再次点击当前分类时取消。
-   */
-  const toggleCategory = (value: ClipboardCategory) => {
-    clipboardViewState.category =
-      clipboardViewState.category === value ? null : value;
+    if (value === "all") {
+      clipboardViewState.category = null;
+      clipboardViewState.groupId = null;
+    }
   };
 
   /**
@@ -258,9 +232,6 @@ const Group: FC = () => {
       return;
     }
 
-    if (type === "category" && isCategoryGroup(value)) {
-      toggleCategory(value);
-    }
   };
 
   /**
@@ -279,25 +250,15 @@ const Group: FC = () => {
   };
 
   /**
-   * 处理分组栏快捷键：Cmd/Ctrl+Q 切换范围，左右键切分类，Tab / Shift+Tab 仅在可见自定义分组间循环。
+   * 处理分组栏快捷键：Cmd/Ctrl+Q 切换收藏副面板；
+   * Tab / Shift+Tab 仍只在可见自定义分组间循环。
    */
   const handleKeyDown = (event: KeyboardEvent) => {
     const eventModifierPressed = event.metaKey || event.ctrlKey;
 
     if (eventModifierPressed && event.key.toLowerCase() === "q") {
       event.preventDefault();
-      toggleRange();
-
-      return;
-    }
-
-    if (
-      (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
-      !shouldUseNativeHorizontalNavigation(event)
-    ) {
-      event.preventDefault();
-      selectAdjacentCategory(event.key === "ArrowLeft" ? -1 : 1);
-
+      toggleSidePanel("favorite");
       return;
     }
 
@@ -317,32 +278,6 @@ const Group: FC = () => {
   };
 
   useKeyboardEvent("keydown", handleKeyDown);
-
-  /**
-   * 在全部 / 收藏范围之间循环切换，不影响分类与自定义分组筛选。
-   */
-  const toggleRange = () => {
-    clipboardViewState.range =
-      clipboardViewState.range === "all" ? "favorite" : "all";
-  };
-
-  /**
-   * 按方向键在固定分类序列内循环；未选分类时从方向对应的端点进入。
-   */
-  const selectAdjacentCategory = (direction: -1 | 1) => {
-    const options = CATEGORY_GROUP_OPTIONS.map((option) => {
-      return option.value;
-    });
-    const currentCategory = clipboardViewState.category;
-    const current = currentCategory ? options.indexOf(currentCategory) : -1;
-    const startIndex = direction === 1 ? -1 : options.length;
-    const nextIndex =
-      (current === -1 ? startIndex + direction : current + direction) %
-      options.length;
-    const normalizedIndex = (nextIndex + options.length) % options.length;
-
-    clipboardViewState.category = options[normalizedIndex];
-  };
 
   /**
    * 打开新增分组弹框。
@@ -605,16 +540,10 @@ const Group: FC = () => {
    * 渲染范围按钮。
    */
   const renderRangeButton = ({ labelKey, value, icon }: RangeGroupOption) => {
-    const selected = range === value;
-    const nextRange =
-      range === "all" ? "favorite" : range === "favorite" ? "all" : void 0;
-    const showShortcutHint = nextRange === value;
-
     return renderFilterButton({
       icon,
       label: t(`clipboard:${labelKey}`),
-      selected,
-      showShortcutHint,
+      selected: range === value,
       type: "range",
       value,
     });
@@ -664,9 +593,7 @@ const Group: FC = () => {
         data-tauri-drag-region
         ref={toolbarRef}
       >
-        {RANGE_GROUP_OPTIONS.filter(({ value }) => {
-          return value === "all";
-        }).map(renderRangeButton)}
+        {RANGE_GROUP_OPTIONS.map(renderRangeButton)}
         <GroupSeparator />
         {SIDE_PANEL_DEFINITIONS.map(renderSidePanelButton)}
         <GroupSeparator separatorRef={customGroupAnchorRef} />
@@ -984,15 +911,6 @@ function isRangeGroup(value: unknown): value is ClipboardRange {
 /**
  * 判断字符串是否为分类分组值。
  */
-function isCategoryGroup(value: unknown): value is ClipboardCategory {
-  return CATEGORY_GROUP_OPTIONS.some((option) => {
-    return option.value === value;
-  });
-}
-
-/**
- * 在可见自定义分组间前后循环；当前未选中分组时，正向取第一个，反向取最后一个。
- */
 function selectAdjacentCustomGroup(
   groups: ClipboardGroupRecord[],
   groupId: string | null,
@@ -1021,19 +939,6 @@ function selectAdjacentCustomGroup(
 
 /**
  * 判断左右键是否应交给输入控件原生光标导航。
- */
-function shouldUseNativeHorizontalNavigation(event: KeyboardEvent) {
-  const target = event.target;
-  if (!(target instanceof HTMLElement)) return false;
-
-  const tagName = target.tagName.toLowerCase();
-  if (target.isContentEditable) return true;
-
-  return tagName === "input" || tagName === "textarea";
-}
-
-/**
- * 当前选中分组被删除或不再存在时，回到全部分组。
  */
 function ensureSelectedGroupStillExists(groups: ClipboardGroupRecord[]) {
   const selectedGroupId = clipboardViewState.groupId;
