@@ -1,7 +1,7 @@
 use tauri::AppHandle;
 
 use crate::core::Result;
-use crate::settings::WindowPosition;
+use crate::settings::{SidePanelKind, WindowPosition};
 use crate::window;
 
 pub use window::lifecycle::LifecycleSnapshot;
@@ -82,6 +82,20 @@ pub async fn open_preference_with_highlight(app: AppHandle, setting_id: String) 
 #[tauri::command]
 pub async fn take_pending_preference_highlight() -> Option<String> {
     window::take_pending_preference_highlight()
+}
+
+#[tauri::command]
+pub async fn get_clipboard_side_panels_state() -> window::ClipboardSidePanelsState {
+    window::clipboard_side_panels_state()
+}
+
+#[tauri::command]
+pub async fn set_clipboard_side_panel_open(
+    app: AppHandle,
+    panel: SidePanelKind,
+    open: bool,
+) -> Result<window::ClipboardSidePanelsState> {
+    window::set_clipboard_side_panel_open(&app, panel, open)
 }
 
 #[tauri::command]
