@@ -230,7 +230,11 @@ fn apply_side_panels_visibility(app_handle: &AppHandle) -> Result<()> {
         windows::hide_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL)?;
 
         emit_visibility(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL, false);
-        lifecycle::on_hidden(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL, "side-panels-empty");
+        lifecycle::on_hidden(
+            app_handle,
+            CLIPBOARD_PINNED_WINDOW_LABEL,
+            "side-panels-empty",
+        );
     }
 
     Ok(())
@@ -422,10 +426,8 @@ pub fn sync_pinned_panel_layout(app_handle: &AppHandle) -> Result<()> {
         let available_side_width =
             (monitor_size.width as i32 - main_inner_size.width as i32).max(1);
         let per_panel_available = available_side_width / panel_count as i32;
-        let min_panel_width =
-            (SIDE_PANEL_MIN_WIDTH_LOGICAL * scale).round().max(1.0) as i32;
-        let max_panel_width =
-            (SIDE_PANEL_MAX_WIDTH_LOGICAL * scale).round().max(1.0) as i32;
+        let min_panel_width = (SIDE_PANEL_MIN_WIDTH_LOGICAL * scale).round().max(1.0) as i32;
+        let max_panel_width = (SIDE_PANEL_MAX_WIDTH_LOGICAL * scale).round().max(1.0) as i32;
         let per_panel_width = per_panel_available.clamp(min_panel_width, max_panel_width);
         let pinned_width = (per_panel_width * panel_count as i32).max(1) as u32;
         let pair_inner_width = main_inner_size.width as i32 + pinned_width as i32;
@@ -435,8 +437,7 @@ pub fn sync_pinned_panel_layout(app_handle: &AppHandle) -> Result<()> {
 
         (main_inner_x, pinned_width)
     } else {
-        let per_panel_width =
-            (SIDE_PANEL_MAX_WIDTH_LOGICAL * scale).round().max(1.0) as u32;
+        let per_panel_width = (SIDE_PANEL_MAX_WIDTH_LOGICAL * scale).round().max(1.0) as u32;
         (
             preferred_main_inner_x,
             per_panel_width.saturating_mul(panel_count),
