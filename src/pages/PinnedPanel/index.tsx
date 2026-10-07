@@ -10,6 +10,7 @@ import {
   movePinnedClipboardItem,
   pasteClipboardItem,
   setClipboardSidePanelOpen,
+  toggleClipboardItemFavorite,
   toggleClipboardItemPinned,
 } from "@/commands";
 import ClipboardGroupIcon from "@/components/ClipboardGroupIcon";
@@ -285,6 +286,39 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
 
       void pasteClipboardItem(item.id, false);
     };
+
+    if (kind === "favorite") {
+      const menu: MenuProps = {
+        items: [
+          {
+            key: "unfavorite",
+            label: t("quickActions.starActive"),
+          },
+        ],
+        onClick: async ({ key, domEvent }) => {
+          domEvent.stopPropagation();
+          if (key !== "unfavorite") return;
+
+          await toggleClipboardItemFavorite(item.id, false);
+          reload();
+        },
+      };
+
+      return (
+        <Dropdown menu={menu} trigger={["contextMenu"]}>
+          <div>
+            <ClipboardCard
+              disableContextMenu
+              isSelected={false}
+              item={item}
+              onMouseDown={handleMouseDown}
+              quickActions={[]}
+              showOriginalOnHover={false}
+            />
+          </div>
+        </Dropdown>
+      );
+    }
 
     if (kind !== "pinned") {
       return (
