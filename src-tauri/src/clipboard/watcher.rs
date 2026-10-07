@@ -95,7 +95,9 @@ pub fn materialize_source(
     }
 
     let icon_file = src
-        .icon_png
+        .icon_path
+        .as_deref()
+        .and_then(|path| super::icon::icon_png(path, None))
         .as_deref()
         .and_then(|bytes| match store.store(bytes) {
             Ok(name) => Some(name),
@@ -296,7 +298,9 @@ impl ClipboardHandler for ClipboardChangeHandler {
             .map(|s| s.snapshot())
             .unwrap_or_default();
 
-        // 同步读取 + 转换（含图片落盘）：拿到 content_hash 才能判定是否为自身写回。
+        // 监听线程只负责尽快把“这一刻”的剪贴板内容冻结成 payload。
+        // 后续子类型识别、图片落盘、来源图标提取、DB 写入全部移出 watcher callback，
+        // 避免连续 Ctrl+C 时第 2/3/4 次内容在我们还处理上一条时被系统覆盖。
         let payload = match read_with_retry(&CLIPBOARD_READ_RETRY_DELAYS, || {
             self.reader.read_with_capture(&settings.clipboard.capture)
         }) {
@@ -307,36 +311,60 @@ impl ClipboardHandler for ClipboardChangeHandler {
                 return;
             }
         };
+        let captured_at = Utc::now();
 
-        let mut item = match build_item_with_settings(
-            &self.store,
-            &payload,
-            &settings.clipboard.capture,
-            &settings.clipboard.sensitive,
-            settings.clipboard.content.copy_plain,
-        ) {
-            Ok(Some(item)) => item,
-            Ok(None) => return,
-            Err(err) => {
-                log::warn!("clipboard watcher: build item failed: {err}");
-                return;
-            }
-        };
-
-        // 自身写回触发的变更：跳过入库，避免回环。
-        if self.guard.should_skip(&item.content_hash) {
-            return;
-        }
-
-        let source_app =
-            source.map(|src| materialize_source(&self.app_icon_store, Some(&self.registry), src));
-        if let Some(src) = &source_app {
-            item.source_app_id = Some(src.id.clone());
-        }
-
-        // 入库与 emit 交给异步运行时；只移动 Send 数据，不碰平台句柄。
         let app = self.app.clone();
+        let guard = self.guard.clone();
+        let store = self.store.clone();
+        let app_icon_store = self.app_icon_store.clone();
+        let registry = self.registry.clone();
         tauri::async_runtime::spawn(async move {
+            let prepared = tauri::async_runtime::spawn_blocking(move || {
+                let mut item = match build_item_with_settings(
+                    &store,
+                    &payload,
+                    &settings.clipboard.capture,
+                    &settings.clipboard.sensitive,
+                    settings.clipboard.content.copy_plain,
+                ) {
+                    Ok(Some(item)) => item,
+                    Ok(None) => return None,
+                    Err(err) => {
+                        log::warn!("clipboard watcher: build item failed: {err}");
+                        return None;
+                    }
+                };
+
+                // 创建时间必须取 OS 事件回调中冻结 payload 的时刻，而不是后台任务完成时刻，
+                // 否则多条并行处理时会因为图标/图片耗时不同而打乱历史顺序。
+                item.created_at = captured_at;
+                item.updated_at = captured_at;
+
+                // 自身写回触发的变更：后台判定并跳过，既避免回环，也不阻塞下一次复制事件。
+                if guard.should_skip(&item.content_hash) {
+                    return None;
+                }
+
+                let source_app =
+                    source.map(|src| materialize_source(&app_icon_store, Some(&registry), src));
+                if let Some(src) = &source_app {
+                    item.source_app_id = Some(src.id.clone());
+                }
+
+                Some((item, source_app))
+            })
+            .await;
+
+            let Some((item, source_app)) = (match prepared {
+                Ok(prepared) => prepared,
+                Err(err) => {
+                    log::error!("clipboard watcher: background preparation task failed: {err}");
+                    None
+                }
+            }) else {
+                return;
+            };
+
             let pool = app.state::<crate::db::DatabaseState>().pool().await;
             if let Err(err) = persist_and_notify(&app, &pool, &item, source_app.as_ref()).await {
                 log::error!("clipboard watcher: persist failed: {err}");
