@@ -8,6 +8,7 @@ import {
 import { presetAntdColors } from "./src/unocss/presetAntdColors";
 
 export default defineConfig({
+  presets: [presetWind4(), presetAntdColors(), presetIcons()],
   safelist: [
     "i-ph:push-pin-bold",
     "i-lets-icons:star",
@@ -15,7 +16,6 @@ export default defineConfig({
     "i-lets-icons:img-box",
     "i-lets-icons:folder-file-alt",
   ],
-  presets: [presetWind4(), presetAntdColors(), presetIcons()],
   transformers: [
     transformerVariantGroup(),
     transformerDirectives({
