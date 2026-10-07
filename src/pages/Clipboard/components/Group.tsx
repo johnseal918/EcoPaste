@@ -231,7 +231,6 @@ const Group: FC = () => {
       selectRange(value);
       return;
     }
-
   };
 
   /**
