@@ -23,11 +23,7 @@ import type {
   ClipboardSubKind,
   UpdateNoteResult,
 } from "@/types/clipboard";
-import type {
-  Settings,
-  SettingsPatch,
-  SidePanelKind,
-} from "@/types/settings";
+import type { Settings, SettingsPatch, SidePanelKind } from "@/types/settings";
 import { getMessageApi, getModalApi } from "@/utils/feedback";
 import { log } from "@/utils/log";
 import { confirmClearClipboardItems } from "./confirmClearClipboardItems";
@@ -356,7 +352,7 @@ export const setClipboardSidePanelOpen = (
   return call<ClipboardSidePanelsRuntimeState>(
     TAURI_COMMAND.SET_CLIPBOARD_SIDE_PANEL_OPEN,
     "commands:labels.openWindow",
-    { panel, open },
+    { open, panel },
   );
 };
 
