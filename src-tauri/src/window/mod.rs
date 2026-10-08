@@ -285,6 +285,15 @@ fn apply_side_panels_visibility(app_handle: &AppHandle) -> Result<()> {
         }
     }
 
+    // 主窗必须在两个副宿主全部 show 后重新置于桌面顶层。
+    // 如果 topmost 失败只记错误，仍允许后续操作；不能让一次诊断遮蔽原来的剪贴板功能。
+    #[cfg(target_os = "windows")]
+    if main_visible && !main_hiding {
+        if let Err(err) = windows::raise_main_clipboard_window(app_handle) {
+            log::error!("raise main clipboard window after showing side panels failed: {err}");
+        }
+    }
+
     Ok(())
 }
 
