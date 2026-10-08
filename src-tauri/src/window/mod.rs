@@ -22,6 +22,7 @@ use crate::settings::{SettingsStore, SidePanelKind, WindowPosition};
 
 pub const CLIPBOARD_WINDOW_LABEL: &str = "clipboard";
 pub const CLIPBOARD_PINNED_WINDOW_LABEL: &str = "clipboard-pinned";
+pub const CLIPBOARD_SIDE_LEFT_WINDOW_LABEL: &str = "clipboard-side-left";
 pub const PREFERENCE_WINDOW_LABEL: &str = "preference";
 pub const CLIPBOARD_PREVIEW_WINDOW_LABEL: &str = "clipboard-preview";
 pub const ONBOARDING_WINDOW_LABEL: &str = "onboarding";
@@ -209,32 +210,56 @@ pub fn set_clipboard_side_panel_open(
     Ok(clipboard_side_panels_state())
 }
 
+fn active_side_panel_counts(app_handle: &AppHandle) -> (usize, usize) {
+    let open = clipboard_side_panels_state().open;
+    let left = app_handle
+        .try_state::<SettingsStore>()
+        .map(|store| store.snapshot().clipboard.side_panels.left)
+        .unwrap_or_default();
+    let left_count = open.iter().filter(|panel| left.contains(panel)).count();
+    (left_count, open.len() - left_count)
+}
+
+/// 位置变更时只更新现有两个宿主的布局，不重建已完成的业务面板。
+pub fn refresh_side_panels_layout(app_handle: &AppHandle) -> Result<()> {
+    if !get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?
+        .is_visible()
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    apply_side_panels_visibility(app_handle)?;
+    emit_side_panels_state(app_handle);
+    Ok(())
+}
+
 fn apply_side_panels_visibility(app_handle: &AppHandle) -> Result<()> {
-    let should_show = !clipboard_side_panels_state().open.is_empty();
-    let companion = get_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL)?;
-
-    if should_show {
+    let (left_count, right_count) = active_side_panel_counts(app_handle);
+    if left_count + right_count > 0 {
         sync_pinned_panel_layout(app_handle)?;
+    }
 
-        #[cfg(target_os = "macos")]
-        macos::show_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL)?;
-        #[cfg(target_os = "windows")]
-        windows::show_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL)?;
-
-        emit_visibility(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL, true);
-        lifecycle::on_shown(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL);
-    } else if companion.is_visible().unwrap_or(false) {
-        #[cfg(target_os = "macos")]
-        macos::hide_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL)?;
-        #[cfg(target_os = "windows")]
-        windows::hide_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL)?;
-
-        emit_visibility(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL, false);
-        lifecycle::on_hidden(
-            app_handle,
-            CLIPBOARD_PINNED_WINDOW_LABEL,
-            "side-panels-empty",
-        );
+    for (label, should_show) in [
+        (CLIPBOARD_SIDE_LEFT_WINDOW_LABEL, left_count > 0),
+        (CLIPBOARD_PINNED_WINDOW_LABEL, right_count > 0),
+    ] {
+        let companion = get_window(app_handle, label)?;
+        let visible = companion.is_visible().unwrap_or(false);
+        if should_show && !visible {
+            #[cfg(target_os = "macos")]
+            macos::show_window(app_handle, label)?;
+            #[cfg(target_os = "windows")]
+            windows::show_window(app_handle, label)?;
+            emit_visibility(app_handle, label, true);
+            lifecycle::on_shown(app_handle, label);
+        } else if !should_show && visible {
+            #[cfg(target_os = "macos")]
+            macos::hide_window(app_handle, label)?;
+            #[cfg(target_os = "windows")]
+            windows::hide_window(app_handle, label)?;
+            emit_visibility(app_handle, label, false);
+            lifecycle::on_hidden(app_handle, label, "side-panels-empty");
+        }
     }
 
     Ok(())
@@ -310,13 +335,15 @@ pub fn hide_window(app_handle: &AppHandle, label: &str) -> Result<()> {
 
     if label == CLIPBOARD_WINDOW_LABEL {
         preview::suppress_for_clipboard_hide(app_handle);
-        #[cfg(target_os = "macos")]
-        let companion_result = macos::hide_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL);
-        #[cfg(target_os = "windows")]
-        let companion_result = windows::hide_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL);
-        if companion_result.is_ok() {
-            emit_visibility(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL, false);
-            lifecycle::on_hidden(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL, "companion-hide");
+        for companion_label in [CLIPBOARD_SIDE_LEFT_WINDOW_LABEL, CLIPBOARD_PINNED_WINDOW_LABEL] {
+            #[cfg(target_os = "macos")]
+            let companion_result = macos::hide_window(app_handle, companion_label);
+            #[cfg(target_os = "windows")]
+            let companion_result = windows::hide_window(app_handle, companion_label);
+            if companion_result.is_ok() {
+                emit_visibility(app_handle, companion_label, false);
+                lifecycle::on_hidden(app_handle, companion_label, "companion-hide");
+            }
         }
         set_open_side_panels(Vec::new());
         emit_side_panels_state(app_handle);
@@ -379,91 +406,139 @@ fn apply_clipboard_window_layout(app_handle: &AppHandle) -> Result<()> {
     position::position_window(&window, position)
 }
 
-/// 置顶面板使用固定逻辑宽度，并按两个 WebView 的“可见内区”而不是外窗阴影边界对齐。
-/// Windows 无边框透明窗仍可能有 DWM 不可见边距：若按 outer_size/outer_position 拼接，
-/// 会留下中间灰缝，且把主窗 outer height 当作右窗 inner height 时会导致右窗越同步越高。
-/// 这里显式补偿 inner/outer inset：内容边缘零间隙、顶部/底部严格对齐。
+/// 三个 WebView 的可见内容区贴合：左宿主 | 主窗口 | 右宿主，间距恒为 0。
+/// 补偿每个窗口自身的 DWM inner/outer inset；窄屏收窄宿主视口，面板在前端横向滚动。
 pub fn sync_pinned_panel_layout(app_handle: &AppHandle) -> Result<()> {
-    use tauri::{PhysicalPosition, PhysicalSize};
+    use tauri::PhysicalPosition;
 
-    const SIDE_PANEL_MAX_WIDTH_LOGICAL: f64 = 360.0;
-    const SIDE_PANEL_MIN_WIDTH_LOGICAL: f64 = 240.0;
+    let (left_count, right_count) = active_side_panel_counts(app_handle);
+    if left_count + right_count == 0 {
+        return Ok(());
+    }
 
     let main = get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?;
-    let pinned = get_window(app_handle, CLIPBOARD_PINNED_WINDOW_LABEL)?;
-    let panel_count = clipboard_side_panels_state().open.len().max(1) as u32;
-
-    let main_outer_position = main.outer_position().map_err(|err| anyhow::anyhow!(err))?;
-    let main_inner_position = main.inner_position().map_err(|err| anyhow::anyhow!(err))?;
-    let main_inner_size = main.inner_size().map_err(|err| anyhow::anyhow!(err))?;
-    let main_inset_x = main_inner_position.x - main_outer_position.x;
-
+    let main_outer = main.outer_position().map_err(|err| anyhow::anyhow!(err))?;
+    let main_inner = main.inner_position().map_err(|err| anyhow::anyhow!(err))?;
+    let main_size = main.inner_size().map_err(|err| anyhow::anyhow!(err))?;
+    let main_inset_x = main_inner.x - main_outer.x;
     let scale = main.scale_factor().map_err(|err| anyhow::anyhow!(err))?;
-
-    // 读取右窗自身的 DWM 内外边距，用它把“可见内容左上角”对齐到主窗内容右上角。
-    let pinned_outer_position = pinned
-        .outer_position()
-        .map_err(|err| anyhow::anyhow!(err))?;
-    let pinned_inner_position = pinned
-        .inner_position()
-        .map_err(|err| anyhow::anyhow!(err))?;
-    let pinned_inset_x = pinned_inner_position.x - pinned_outer_position.x;
-    let pinned_inset_y = pinned_inner_position.y - pinned_outer_position.y;
+    let per_panel = (360.0 * scale).round().max(1.0) as i32;
 
     let monitor = main
         .current_monitor()
         .map_err(|err| anyhow::anyhow!(err))?
         .or_else(|| main.primary_monitor().ok().flatten());
-
-    let preferred_main_inner_x = main_inner_position.x;
-    let main_inner_y = main_inner_position.y;
-
-    let (main_inner_x, pinned_width) = if let Some(monitor) = monitor {
-        let monitor_position = monitor.position();
-        let monitor_size = monitor.size();
-        let monitor_left = monitor_position.x;
-        let monitor_right = monitor_left + monitor_size.width as i32;
-        let available_side_width =
-            (monitor_size.width as i32 - main_inner_size.width as i32).max(1);
-        let per_panel_available = available_side_width / panel_count as i32;
-        let min_panel_width = (SIDE_PANEL_MIN_WIDTH_LOGICAL * scale).round().max(1.0) as i32;
-        let max_panel_width = (SIDE_PANEL_MAX_WIDTH_LOGICAL * scale).round().max(1.0) as i32;
-        let per_panel_width = per_panel_available.clamp(min_panel_width, max_panel_width);
-        let pinned_width = (per_panel_width * panel_count as i32).max(1) as u32;
-        let pair_inner_width = main_inner_size.width as i32 + pinned_width as i32;
-        let main_inner_x = preferred_main_inner_x
-            .min(monitor_right - pair_inner_width)
-            .max(monitor_left);
-
-        (main_inner_x, pinned_width)
+    let (main_x, left_width, right_width) = if let Some(monitor) = monitor {
+        let monitor_left = monitor.position().x;
+        let monitor_right = monitor_left + monitor.size().width as i32;
+        let available = (monitor.size().width as i32 - main_size.width as i32).max(0);
+        let (left_width, right_width) =
+            allocate_panel_widths(available, left_count, right_count, per_panel);
+        let min_main_x = monitor_left + left_width;
+        let max_main_x = monitor_right - main_size.width as i32 - right_width;
+        let main_x = main_inner.x.clamp(min_main_x, max_main_x.max(min_main_x));
+        (main_x, left_width, right_width)
     } else {
-        let per_panel_width = (SIDE_PANEL_MAX_WIDTH_LOGICAL * scale).round().max(1.0) as u32;
         (
-            preferred_main_inner_x,
-            per_panel_width.saturating_mul(panel_count),
+            main_inner.x,
+            left_count as i32 * per_panel,
+            right_count as i32 * per_panel,
         )
     };
 
-    // set_size 接收的是窗口内区尺寸，因此高度必须跟 main.inner_size 对齐。
-    pinned
-        .set_size(PhysicalSize::new(pinned_width, main_inner_size.height))
-        .map_err(|err| anyhow::anyhow!(err))?;
-
-    // 主窗只在横向需要让位时平移；保持其当前可见顶部不变。
-    let main_outer_x = main_inner_x - main_inset_x;
-    if main_outer_x != main_outer_position.x {
-        main.set_position(PhysicalPosition::new(main_outer_x, main_outer_position.y))
+    let main_outer_x = main_x - main_inset_x;
+    if main_outer_x != main_outer.x {
+        main.set_position(PhysicalPosition::new(main_outer_x, main_outer.y))
             .map_err(|err| anyhow::anyhow!(err))?;
     }
 
-    // 右窗的可见内区左边缘 = 主窗可见内区右边缘；可见顶部完全一致。
-    let pinned_outer_x = main_inner_x + main_inner_size.width as i32 - pinned_inset_x;
-    let pinned_outer_y = main_inner_y - pinned_inset_y;
-    pinned
-        .set_position(PhysicalPosition::new(pinned_outer_x, pinned_outer_y))
+    if left_count > 0 {
+        position_side_panel(
+            app_handle,
+            CLIPBOARD_SIDE_LEFT_WINDOW_LABEL,
+            left_width,
+            main_x - left_width,
+            main_inner.y,
+            main_size.height,
+        )?;
+    }
+    if right_count > 0 {
+        position_side_panel(
+            app_handle,
+            CLIPBOARD_PINNED_WINDOW_LABEL,
+            right_width,
+            main_x + main_size.width as i32,
+            main_inner.y,
+            main_size.height,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn position_side_panel(
+    app_handle: &AppHandle,
+    label: &str,
+    width: i32,
+    inner_x: i32,
+    inner_y: i32,
+    height: u32,
+) -> Result<()> {
+    use tauri::{PhysicalPosition, PhysicalSize};
+
+    let panel = get_window(app_handle, label)?;
+    let outer = panel.outer_position().map_err(|err| anyhow::anyhow!(err))?;
+    let inner = panel.inner_position().map_err(|err| anyhow::anyhow!(err))?;
+    let inset_x = inner.x - outer.x;
+    let inset_y = inner.y - outer.y;
+
+    panel
+        .set_size(PhysicalSize::new(width.max(1) as u32, height))
+        .map_err(|err| anyhow::anyhow!(err))?;
+    panel
+        .set_position(PhysicalPosition::new(inner_x - inset_x, inner_y - inset_y))
         .map_err(|err| anyhow::anyhow!(err))?;
 
     Ok(())
+}
+
+/// 两侧优先显示完整宽度；空间不足时按打开面板数分配视口宽度。
+fn allocate_panel_widths(
+    available: i32,
+    left_count: usize,
+    right_count: usize,
+    per_panel: i32,
+) -> (i32, i32) {
+    let left_wanted = (left_count as i32).saturating_mul(per_panel);
+    let right_wanted = (right_count as i32).saturating_mul(per_panel);
+    if left_wanted.saturating_add(right_wanted) <= available {
+        return (left_wanted, right_wanted);
+    }
+    if left_count == 0 {
+        return (0, available.max(1));
+    }
+    if right_count == 0 {
+        return (available.max(1), 0);
+    }
+    let usable = available.max(2);
+    let left_width =
+        ((usable as i64 * left_count as i64) / (left_count + right_count) as i64) as i32;
+    let left_width = left_width.clamp(1, usable - 1);
+    (left_width, usable - left_width)
+}
+
+#[cfg(test)]
+mod side_panel_layout_tests {
+    use super::allocate_panel_widths;
+
+    #[test]
+    fn zero_gap_width_allocation_stays_within_screen() {
+        assert_eq!(allocate_panel_widths(1560, 2, 3, 360), (624, 936));
+        assert_eq!(allocate_panel_widths(1006, 2, 3, 360), (402, 604));
+        assert_eq!(allocate_panel_widths(1006, 0, 5, 360), (0, 1006));
+        assert_eq!(allocate_panel_widths(2000, 1, 1, 360), (360, 360));
+        assert_eq!(allocate_panel_widths(340, 1, 1, 360), (170, 170));
+    }
 }
 
 /// 保存当前所有窗口的几何信息。供应用退出（`RunEvent::ExitRequested`）时调用，

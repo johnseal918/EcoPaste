@@ -161,6 +161,8 @@ export interface Window {
 export interface SidePanels {
   order: SidePanelKind[];
   alwaysShow: SidePanelKind[];
+  /** 未列在 left 的面板默认停靠主窗口右侧。 */
+  left: SidePanelKind[];
 }
 
 export interface Preview {

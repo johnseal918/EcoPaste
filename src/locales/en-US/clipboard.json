@@ -130,6 +130,8 @@
     "image": "Images",
     "moveLeft": "Move left",
     "moveRight": "Move right",
+    "moveToLeft": "Dock left of main panel",
+    "moveToRight": "Dock right of main panel",
     "pinned": "Pinned",
     "text": "Text"
   },

@@ -17,6 +17,10 @@ export const router = createHashRouter([
     path: "/clipboard-pinned",
   },
   {
+    Component: PinnedPanel,
+    path: "/clipboard-side-left",
+  },
+  {
     Component: Preference,
     path: "/preference",
   },

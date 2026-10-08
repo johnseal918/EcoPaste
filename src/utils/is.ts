@@ -26,7 +26,8 @@ export const isWinClipboardWindow = () => {
   return (
     isWin &&
     (label === WINDOW_LABEL.CLIPBOARD ||
-      label === WINDOW_LABEL.CLIPBOARD_PINNED)
+      label === WINDOW_LABEL.CLIPBOARD_PINNED ||
+      label === WINDOW_LABEL.CLIPBOARD_SIDE_LEFT)
   );
 };
 

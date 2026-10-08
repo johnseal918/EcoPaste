@@ -11,7 +11,10 @@ use winapi::um::winuser::{
     MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN,
 };
 
-use crate::window::{self, CLIPBOARD_PINNED_WINDOW_LABEL, CLIPBOARD_WINDOW_LABEL};
+use crate::window::{
+    self, CLIPBOARD_PINNED_WINDOW_LABEL, CLIPBOARD_SIDE_LEFT_WINDOW_LABEL,
+    CLIPBOARD_WINDOW_LABEL,
+};
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static HOOK_THREAD_ID: Mutex<Option<u32>> = Mutex::new(None);
@@ -103,6 +106,7 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
 fn cursor_outside_clipboard_window(app: &AppHandle, cursor: POINT) -> bool {
     !point_inside_window(app, CLIPBOARD_WINDOW_LABEL, cursor)
         && !point_inside_window(app, CLIPBOARD_PINNED_WINDOW_LABEL, cursor)
+        && !point_inside_window(app, CLIPBOARD_SIDE_LEFT_WINDOW_LABEL, cursor)
 }
 
 fn point_inside_window(app: &AppHandle, label: &str, cursor: POINT) -> bool {

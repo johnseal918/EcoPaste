@@ -50,6 +50,11 @@ pub async fn update_settings(app: AppHandle, patch: serde_json::Value) -> Result
                 .is_some_and(|g| g.contains_key("runAsAdmin"))
         })
         .unwrap_or(false);
+    let touches_panel_location = patch_obj
+        .and_then(|m| m.get("clipboard"))
+        .and_then(|v| v.get("sidePanels"))
+        .and_then(|v| v.get("left"))
+        .is_some();
 
     let next = app.state::<SettingsStore>().update(patch)?;
 
@@ -70,6 +75,11 @@ pub async fn update_settings(app: AppHandle, patch: serde_json::Value) -> Result
     }
 
     emit_settings_updated(&app, &next);
+    if touches_panel_location {
+        if let Err(err) = window::refresh_side_panels_layout(&app) {
+            log::warn!("refresh side panels after location update failed: {err}");
+        }
+    }
 
     Ok(next)
 }
@@ -81,6 +91,9 @@ pub async fn reset_settings(app: AppHandle) -> Result<Settings> {
 
     apply_reset_side_effects(&app, &next);
     emit_settings_updated(&app, &next);
+    if let Err(err) = window::refresh_side_panels_layout(&app) {
+        log::warn!("refresh side panels after settings reset failed: {err}");
+    }
 
     Ok(next)
 }

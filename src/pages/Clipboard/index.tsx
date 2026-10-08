@@ -9,7 +9,7 @@ const Clipboard = () => {
 
   return (
     <div
-      className="flex size-screen flex-col overflow-hidden bg-ant-container"
+      className="clipboard-main-frame flex size-screen flex-col overflow-hidden bg-ant-container"
       data-tauri-drag-region
     >
       <Header />

@@ -15,6 +15,8 @@ import TextCard from "./TextCard";
 interface ClipboardCardProps {
   item: ClipboardItem;
   isSelected?: boolean;
+  /** 副面板悬停高亮，不修改主列表的键盘选中语义。 */
+  hoverHighlight?: boolean;
   /**
    * 快捷键提示字符（"1"–"9" / "0"），存在时在 app 图标上叠加 KeyHint；
    * 按下修饰键（macOS ⌘ / Windows Ctrl）+ 该数字键触发快速粘贴。
@@ -56,6 +58,7 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
   const {
     item,
     isSelected,
+    hoverHighlight = false,
     hintKey,
     onQuickPaste,
     isLinkActive,
@@ -77,6 +80,7 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
   const [hovered, setHovered] = useState(false);
   const body = renderBody(item, isLinkActive, onOpenLink);
   const showSensitiveIndicator = item.isSensitive && item.kind === "text";
+  const highlighted = isSelected || (hoverHighlight && hovered);
 
   const handleDragStart = async (event: DragEvent) => {
     event.preventDefault();
@@ -117,11 +121,11 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
     <div
       aria-selected={isSelected}
       className={cn(
-        "relative flex flex-col gap-1 overflow-hidden rounded-2 border border-ant-border p-2 transition-colors duration-150 ease-out motion-reduce:transition-none",
+        "relative flex flex-col gap-1 overflow-hidden rounded-2 border border-ant-border bg-ant-container p-2 transition-colors duration-150 ease-out motion-reduce:transition-none",
         {
-          "border-ant-primary bg-ant-blue-1": isSelected,
+          "border-ant-primary bg-ant-blue-1": highlighted,
           "border-ant-warning bg-ant-warning-bg":
-            item.priorityOrder !== null && !item.isPinned && !isSelected,
+            item.priorityOrder !== null && !item.isPinned && !highlighted,
         },
       )}
       draggable

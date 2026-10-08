@@ -648,6 +648,8 @@ pub struct SidePanels {
     /// 每次呼出主剪贴板窗口时自动打开的副面板。
     /// 未列入这里的面板只在当前这次手动打开期间显示。
     pub always_show: Vec<SidePanelKind>,
+    /// 仅记录左侧的面板；缺省兼容旧版右侧布局。
+    pub left: Vec<SidePanelKind>,
 }
 
 impl Default for SidePanels {
@@ -655,6 +657,7 @@ impl Default for SidePanels {
         Self {
             order: SidePanelKind::ALL.to_vec(),
             always_show: Vec::new(),
+            left: Vec::new(),
         }
     }
 }

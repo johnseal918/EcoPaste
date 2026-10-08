@@ -11,8 +11,8 @@ use tauri_nspanel::{
 };
 
 use super::{
-    get_window, CLIPBOARD_PINNED_WINDOW_LABEL, CLIPBOARD_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL,
-    PREFERENCE_WINDOW_LABEL,
+    get_window, CLIPBOARD_PINNED_WINDOW_LABEL, CLIPBOARD_SIDE_LEFT_WINDOW_LABEL,
+    CLIPBOARD_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PREFERENCE_WINDOW_LABEL,
 };
 use crate::core::Result;
 use crate::settings::SettingsStore;
@@ -87,7 +87,7 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
     let window = get_window(app_handle, label)?;
     window.show().map_err(|e| anyhow::anyhow!(e))?;
     window.unminimize().map_err(|e| anyhow::anyhow!(e))?;
-    if label != CLIPBOARD_PINNED_WINDOW_LABEL {
+    if label != CLIPBOARD_PINNED_WINDOW_LABEL && label != CLIPBOARD_SIDE_LEFT_WINDOW_LABEL {
         window.set_focus().map_err(|e| anyhow::anyhow!(e))?;
     }
     Ok(())

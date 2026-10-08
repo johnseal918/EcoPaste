@@ -130,6 +130,8 @@
     "image": "图片",
     "moveLeft": "向左移动",
     "moveRight": "向右移动",
+    "moveToLeft": "移到主面板左侧",
+    "moveToRight": "移到主面板右侧",
     "pinned": "置顶",
     "text": "文本"
   },

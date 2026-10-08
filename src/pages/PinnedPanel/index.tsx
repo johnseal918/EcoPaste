@@ -1,3 +1,4 @@
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { MenuProps } from "antd";
 import { Dropdown, Empty, Spin, Switch } from "antd";
 import type { FC, MouseEvent as ReactMouseEvent } from "react";
@@ -16,6 +17,7 @@ import {
 import ClipboardGroupIcon from "@/components/ClipboardGroupIcon";
 import Tooltip from "@/components/Tooltip";
 import { TAURI_EVENT } from "@/constants/events";
+import { WINDOW_LABEL } from "@/constants/windows";
 import {
   SIDE_PANEL_DEFINITIONS,
   SIDE_PANEL_KINDS,
@@ -47,8 +49,15 @@ interface SidePanelColumnProps {
   kind: SidePanelKind;
   onClose: (kind: SidePanelKind) => void;
   onMove: (kind: SidePanelKind, direction: -1 | 1) => void;
+  onMoveSide: (kind: SidePanelKind) => void;
+  side: "left" | "right";
   onToggleAlwaysShow: (kind: SidePanelKind, enabled: boolean) => void;
 }
+
+const hostSide =
+  getCurrentWebviewWindow().label === WINDOW_LABEL.CLIPBOARD_SIDE_LEFT
+    ? "left"
+    : "right";
 
 const PinnedPanel: FC = () => {
   useClipboardWindowEditableFocus();
@@ -70,11 +79,16 @@ const PinnedPanel: FC = () => {
   );
 
   const orderedOpenPanels = useMemo(() => {
+    const left = settings.clipboard.sidePanels.left as SidePanelKind[];
     return normalizePanelOrder(
       settings.clipboard.sidePanels.order as SidePanelKind[],
       openPanels,
-    );
-  }, [openPanels, settings.clipboard.sidePanels.order]);
+    ).filter((kind) => (left.includes(kind) ? "left" : "right") === hostSide);
+  }, [
+    openPanels,
+    settings.clipboard.sidePanels.order,
+    settings.clipboard.sidePanels.left,
+  ]);
 
   const handleClose = (kind: SidePanelKind) => {
     void setClipboardSidePanelOpen(kind, false).then((state) => {
@@ -95,6 +109,21 @@ const PinnedPanel: FC = () => {
         sidePanels: {
           alwaysShow: next,
         },
+      },
+    });
+  };
+
+  const handleMoveSide = (kind: SidePanelKind) => {
+    const current = [
+      ...(settings.clipboard.sidePanels.left as SidePanelKind[]),
+    ];
+    const left = current.includes(kind)
+      ? current.filter((panel) => panel !== kind)
+      : [...current, kind];
+
+    void updateSettings({
+      clipboard: {
+        sidePanels: { left },
       },
     });
   };
@@ -128,24 +157,24 @@ const PinnedPanel: FC = () => {
   };
 
   return (
-    <div className="flex size-screen overflow-hidden bg-ant-container">
-      {orderedOpenPanels.map((kind, index) => {
-        return (
-          <div
-            className="min-w-0 flex-1 border-ant-border border-l first:border-l-0"
-            key={kind}
-          >
+    <div className="size-screen overflow-x-auto overflow-y-hidden bg-ant-container">
+      <div className="flex h-full w-max min-w-full">
+        {orderedOpenPanels.map((kind, index) => {
+          return (
             <SidePanelColumn
               canMoveLeft={index > 0}
               canMoveRight={index < orderedOpenPanels.length - 1}
+              key={kind}
               kind={kind}
               onClose={handleClose}
               onMove={handleMove}
+              onMoveSide={handleMoveSide}
               onToggleAlwaysShow={handleToggleAlwaysShow}
+              side={hostSide}
             />
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 };
@@ -157,7 +186,9 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
     kind,
     onClose,
     onMove,
+    onMoveSide,
     onToggleAlwaysShow,
+    side,
   } = props;
   const { t } = useTranslation("clipboard");
   const settings = useSnapshot(settingsState);
@@ -179,9 +210,11 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
   const rowCount = Math.ceil(total / 2);
 
   return (
-    <div className="flex h-full min-w-0 flex-col overflow-hidden bg-ant-container">
-      <div className="flex h-12 shrink-0 items-center gap-2 border-ant-border border-b px-2">
-        <ClipboardGroupIcon icon={definition.icon} />
+    <div
+      className={`clipboard-side-panel clipboard-side-panel--${kind} flex h-full min-w-[240px] max-w-[360px] flex-1 flex-col overflow-hidden`}
+    >
+      <div className="clipboard-side-panel-header flex h-12 shrink-0 items-center gap-2 px-2">
+        <ClipboardGroupIcon icon={definition.icon} inheritColor />
         <span className="min-w-0 truncate font-medium">
           {t(definition.labelKey)}
         </span>
@@ -189,20 +222,31 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
 
         <div className="ml-auto flex shrink-0 items-center gap-1">
           <Tooltip title={t("sidePanels.alwaysShow")}>
-            <div className="flex items-center gap-1">
-              <span className="whitespace-nowrap text-ant-secondary text-xs">
-                {t("sidePanels.alwaysShow")}
-              </span>
-              <Switch
-                checked={alwaysShow}
-                onChange={(checked) => {
-                  onToggleAlwaysShow(kind, checked);
-                }}
-                size="small"
-              />
-            </div>
+            <Switch
+              aria-label={t("sidePanels.alwaysShow")}
+              checked={alwaysShow}
+              onChange={(checked) => {
+                onToggleAlwaysShow(kind, checked);
+              }}
+              size="small"
+            />
           </Tooltip>
 
+          <PanelHeaderButton
+            icon={
+              side === "left"
+                ? "i-lucide:panel-right"
+                : "i-lucide:panel-left"
+            }
+            label={t(
+              side === "left"
+                ? "sidePanels.moveToRight"
+                : "sidePanels.moveToLeft",
+            )}
+            onClick={() => {
+              onMoveSide(kind);
+            }}
+          />
           <PanelHeaderButton
             disabled={!canMoveLeft}
             icon="i-lucide:chevron-left"
@@ -309,7 +353,7 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
           <div>
             <ClipboardCard
               disableContextMenu
-              isSelected={false}
+              hoverHighlight
               item={item}
               onMouseDown={handleMouseDown}
               quickActions={[]}
@@ -323,7 +367,7 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
     if (kind !== "pinned") {
       return (
         <ClipboardCard
-          isSelected={false}
+          hoverHighlight
           item={item}
           onMouseDown={handleMouseDown}
           quickActions={[]}
@@ -369,7 +413,7 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
         <div>
           <ClipboardCard
             disableContextMenu
-            isSelected={false}
+            hoverHighlight
             item={item}
             onMouseDown={handleMouseDown}
             quickActions={[]}
