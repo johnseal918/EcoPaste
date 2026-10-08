@@ -4,10 +4,7 @@ use std::sync::Mutex;
 
 use tauri::AppHandle;
 use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, IsWindow, IsWindowVisible, SetForegroundWindow, SetWindowPos,
-    HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-};
+use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsWindow, SetForegroundWindow};
 
 use super::{
     get_window, CLIPBOARD_PINNED_WINDOW_LABEL, CLIPBOARD_SIDE_LEFT_WINDOW_LABEL,
@@ -40,49 +37,6 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
         mouse::enable_outside_click_hide(app_handle);
     } else if label != CLIPBOARD_PINNED_WINDOW_LABEL && label != CLIPBOARD_SIDE_LEFT_WINDOW_LABEL {
         window.set_focus().map_err(|e| anyhow::anyhow!(e))?;
-    }
-
-    Ok(())
-}
-
-/// 左右副宿主显示后重新将主窗放回 Windows topmost 栈顶，不激活窗口，不抢粘贴焦点。
-/// 旧版只有一个副窗口，新版后显示的副宿主可能盖过或遮住主窗。
-pub fn raise_main_clipboard_window(app_handle: &AppHandle) -> Result<()> {
-    let main = get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?;
-    let raw = main.hwnd().map_err(|e| anyhow::anyhow!(e))?;
-    let hwnd = HWND(raw.0 as isize);
-
-    main.set_always_on_top(true)
-        .map_err(|e| anyhow::anyhow!(e))?;
-
-    unsafe {
-        SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-        )
-        .map_err(|e| anyhow::anyhow!(e))?;
-    }
-
-    let visible = unsafe { IsWindowVisible(hwnd).as_bool() };
-    let position = main.outer_position().map_err(|e| anyhow::anyhow!(e))?;
-    let size = main.inner_size().map_err(|e| anyhow::anyhow!(e))?;
-    log::info!(
-        "clipboard native main raised: hwnd={:?}, visible={visible}, pos=({},{}), inner={}x{}",
-        hwnd,
-        position.x,
-        position.y,
-        size.width,
-        size.height
-    );
-    if !visible {
-        return Err(
-            anyhow::anyhow!("clipboard main HWND is not visible after topmost promotion").into(),
-        );
     }
 
     Ok(())
