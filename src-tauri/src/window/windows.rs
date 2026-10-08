@@ -5,8 +5,8 @@ use std::sync::Mutex;
 use tauri::AppHandle;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, IsWindow, IsWindowVisible, SetForegroundWindow, SetWindowPos, HWND_TOPMOST,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    GetForegroundWindow, IsWindow, IsWindowVisible, SetForegroundWindow, SetWindowPos,
+    HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
 };
 
 use super::{
@@ -80,7 +80,9 @@ pub fn raise_main_clipboard_window(app_handle: &AppHandle) -> Result<()> {
         size.height
     );
     if !visible {
-        return Err(anyhow::anyhow!("clipboard main HWND is not visible after topmost promotion").into());
+        return Err(
+            anyhow::anyhow!("clipboard main HWND is not visible after topmost promotion").into(),
+        );
     }
 
     Ok(())
