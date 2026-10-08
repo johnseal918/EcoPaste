@@ -530,7 +530,6 @@ fn allocate_panel_widths(
     (left_width, usable - left_width)
 }
 
-
 /// 保存当前所有窗口的几何信息。供应用退出（`RunEvent::ExitRequested`）时调用，
 /// 覆盖「调整大小后不关窗直接退出」这一隐藏/关闭都漏掉的场景。
 pub fn save_all_window_states(app_handle: &AppHandle) {
