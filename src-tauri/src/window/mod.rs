@@ -851,5 +851,4 @@ mod side_panel_layout_tests {
         assert_eq!(allocate_panel_widths(2000, 1, 1, 360), (360, 360));
         assert_eq!(allocate_panel_widths(340, 1, 1, 360), (170, 170));
     }
-
 }
