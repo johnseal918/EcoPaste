@@ -335,7 +335,10 @@ pub fn hide_window(app_handle: &AppHandle, label: &str) -> Result<()> {
 
     if label == CLIPBOARD_WINDOW_LABEL {
         preview::suppress_for_clipboard_hide(app_handle);
-        for companion_label in [CLIPBOARD_SIDE_LEFT_WINDOW_LABEL, CLIPBOARD_PINNED_WINDOW_LABEL] {
+        for companion_label in [
+            CLIPBOARD_SIDE_LEFT_WINDOW_LABEL,
+            CLIPBOARD_PINNED_WINDOW_LABEL,
+        ] {
             #[cfg(target_os = "macos")]
             let companion_result = macos::hide_window(app_handle, companion_label);
             #[cfg(target_os = "windows")]

@@ -12,8 +12,7 @@ use winapi::um::winuser::{
 };
 
 use crate::window::{
-    self, CLIPBOARD_PINNED_WINDOW_LABEL, CLIPBOARD_SIDE_LEFT_WINDOW_LABEL,
-    CLIPBOARD_WINDOW_LABEL,
+    self, CLIPBOARD_PINNED_WINDOW_LABEL, CLIPBOARD_SIDE_LEFT_WINDOW_LABEL, CLIPBOARD_WINDOW_LABEL,
 };
 
 static ENABLED: AtomicBool = AtomicBool::new(false);

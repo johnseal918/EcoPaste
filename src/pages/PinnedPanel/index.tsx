@@ -17,11 +17,11 @@ import {
 import ClipboardGroupIcon from "@/components/ClipboardGroupIcon";
 import Tooltip from "@/components/Tooltip";
 import { TAURI_EVENT } from "@/constants/events";
-import { WINDOW_LABEL } from "@/constants/windows";
 import {
   SIDE_PANEL_DEFINITIONS,
   SIDE_PANEL_KINDS,
 } from "@/constants/sidePanels";
+import { WINDOW_LABEL } from "@/constants/windows";
 import { useClipboardItems } from "@/hooks/useClipboardItems";
 import { useClipboardWindowEditableFocus } from "@/hooks/useClipboardWindowEditableFocus";
 import { useTauriListen } from "@/hooks/useTauriListen";
@@ -234,9 +234,7 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
 
           <PanelHeaderButton
             icon={
-              side === "left"
-                ? "i-lucide:panel-right"
-                : "i-lucide:panel-left"
+              side === "left" ? "i-lucide:panel-right" : "i-lucide:panel-left"
             }
             label={t(
               side === "left"
