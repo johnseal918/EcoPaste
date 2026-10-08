@@ -44,6 +44,10 @@ static PENDING_PREFERENCE_HIGHLIGHT: LazyLock<Mutex<Option<String>>> =
 static OPEN_CLIPBOARD_SIDE_PANELS: LazyLock<Mutex<Vec<SidePanelKind>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 
+/// 主窗口隐藏请求一旦开始，副面板不得被异步事件重新唤起。
+/// 仅在主窗口原生 show 成功后清除，避免出现只有右侧副面板的孤儿窗口。
+static CLIPBOARD_MAIN_HIDE_REQUESTED: AtomicBool = AtomicBool::new(true);
+
 const SIDE_PANELS_UPDATED_EVENT: &str = "clipboard-side-panels://updated";
 
 #[derive(Clone, serde::Serialize)]
@@ -233,19 +237,38 @@ pub fn refresh_side_panels_layout(app_handle: &AppHandle) -> Result<()> {
     Ok(())
 }
 
+fn should_show_side_panel(main_visible: bool, main_hiding: bool, item_count: usize) -> bool {
+    main_visible && !main_hiding && item_count > 0
+}
+
 fn apply_side_panels_visibility(app_handle: &AppHandle) -> Result<()> {
     let (left_count, right_count) = active_side_panel_counts(app_handle);
-    if left_count + right_count > 0 {
+    let main_visible = get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?
+        .is_visible()
+        .unwrap_or(false);
+    let main_hiding = CLIPBOARD_MAIN_HIDE_REQUESTED.load(Ordering::Acquire);
+    let left_visible = should_show_side_panel(main_visible, main_hiding, left_count);
+    let right_visible = should_show_side_panel(main_visible, main_hiding, right_count);
+
+    if left_visible || right_visible {
         sync_pinned_panel_layout(app_handle)?;
     }
 
     for (label, should_show) in [
-        (CLIPBOARD_SIDE_LEFT_WINDOW_LABEL, left_count > 0),
-        (CLIPBOARD_PINNED_WINDOW_LABEL, right_count > 0),
+        (CLIPBOARD_SIDE_LEFT_WINDOW_LABEL, left_visible),
+        (CLIPBOARD_PINNED_WINDOW_LABEL, right_visible),
     ] {
         let companion = get_window(app_handle, label)?;
         let visible = companion.is_visible().unwrap_or(false);
         if should_show && !visible {
+            // 再检查一次以防主窗在布局阶段被外部点击关闭。
+            if CLIPBOARD_MAIN_HIDE_REQUESTED.load(Ordering::Acquire)
+                || !get_window(app_handle, CLIPBOARD_WINDOW_LABEL)?
+                    .is_visible()
+                    .unwrap_or(false)
+            {
+                continue;
+            }
             #[cfg(target_os = "macos")]
             macos::show_window(app_handle, label)?;
             #[cfg(target_os = "windows")]
@@ -313,6 +336,7 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
     }
 
     if result.is_ok() && label == CLIPBOARD_WINDOW_LABEL {
+        CLIPBOARD_MAIN_HIDE_REQUESTED.store(false, Ordering::Release);
         if let Err(err) = apply_side_panels_visibility(app_handle) {
             log::warn!("show clipboard side panels failed: {err}");
         }
@@ -328,6 +352,11 @@ fn delays_clipboard_visibility_event(label: &str) -> bool {
 }
 
 pub fn hide_window(app_handle: &AppHandle, label: &str) -> Result<()> {
+    if label == CLIPBOARD_WINDOW_LABEL {
+        // 必须先关闭允许显示副窗的门，再开始较慢的几何保存与原生 hide。
+        CLIPBOARD_MAIN_HIDE_REQUESTED.store(true, Ordering::Release);
+    }
+
     // 隐藏前保存任意窗口的实时几何：移动与缩放都在这里落盘，下次显示/启动可恢复。
     if let Err(err) = state::save_window_state(app_handle, label) {
         log::warn!("save window state on hide failed for {label}: {err}");
@@ -343,10 +372,16 @@ pub fn hide_window(app_handle: &AppHandle, label: &str) -> Result<()> {
             let companion_result = macos::hide_window(app_handle, companion_label);
             #[cfg(target_os = "windows")]
             let companion_result = windows::hide_window(app_handle, companion_label);
-            if companion_result.is_ok() {
-                emit_visibility(app_handle, companion_label, false);
-                lifecycle::on_hidden(app_handle, companion_label, "companion-hide");
+            if let Err(err) = companion_result {
+                // 不能隐藏主窗口却遗留一个仍可见的置顶副窗。
+                CLIPBOARD_MAIN_HIDE_REQUESTED.store(false, Ordering::Release);
+                log::error!(
+                    "refusing to hide main window: companion {companion_label} did not hide: {err}"
+                );
+                return Err(err);
             }
+            emit_visibility(app_handle, companion_label, false);
+            lifecycle::on_hidden(app_handle, companion_label, "companion-hide");
         }
         set_open_side_panels(Vec::new());
         emit_side_panels_state(app_handle);
@@ -740,7 +775,7 @@ pub fn take_pending_preference_highlight() -> Option<String> {
 
 #[cfg(test)]
 mod side_panel_layout_tests {
-    use super::allocate_panel_widths;
+    use super::{allocate_panel_widths, should_show_side_panel};
 
     #[test]
     fn zero_gap_width_allocation_stays_within_screen() {
@@ -749,5 +784,14 @@ mod side_panel_layout_tests {
         assert_eq!(allocate_panel_widths(1006, 0, 5, 360), (0, 1006));
         assert_eq!(allocate_panel_widths(2000, 1, 1, 360), (360, 360));
         assert_eq!(allocate_panel_widths(340, 1, 1, 360), (170, 170));
+    }
+
+    #[test]
+    fn companion_cannot_outlive_main_window() {
+        assert!(!should_show_side_panel(false, false, 1));
+        assert!(!should_show_side_panel(true, true, 1));
+        assert!(!should_show_side_panel(true, false, 0));
+        assert!(should_show_side_panel(true, false, 1));
+        assert!(should_show_side_panel(true, false, 5));
     }
 }
