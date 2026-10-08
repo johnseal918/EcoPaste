@@ -530,19 +530,6 @@ fn allocate_panel_widths(
     (left_width, usable - left_width)
 }
 
-#[cfg(test)]
-mod side_panel_layout_tests {
-    use super::allocate_panel_widths;
-
-    #[test]
-    fn zero_gap_width_allocation_stays_within_screen() {
-        assert_eq!(allocate_panel_widths(1560, 2, 3, 360), (624, 936));
-        assert_eq!(allocate_panel_widths(1006, 2, 3, 360), (402, 604));
-        assert_eq!(allocate_panel_widths(1006, 0, 5, 360), (0, 1006));
-        assert_eq!(allocate_panel_widths(2000, 1, 1, 360), (360, 360));
-        assert_eq!(allocate_panel_widths(340, 1, 1, 360), (170, 170));
-    }
-}
 
 /// 保存当前所有窗口的几何信息。供应用退出（`RunEvent::ExitRequested`）时调用，
 /// 覆盖「调整大小后不关窗直接退出」这一隐藏/关闭都漏掉的场景。
@@ -750,4 +737,18 @@ pub fn take_pending_preference_highlight() -> Option<String> {
             poisoned.into_inner()
         });
     guard.take()
+}
+
+#[cfg(test)]
+mod side_panel_layout_tests {
+    use super::allocate_panel_widths;
+
+    #[test]
+    fn zero_gap_width_allocation_stays_within_screen() {
+        assert_eq!(allocate_panel_widths(1560, 2, 3, 360), (624, 936));
+        assert_eq!(allocate_panel_widths(1006, 2, 3, 360), (402, 604));
+        assert_eq!(allocate_panel_widths(1006, 0, 5, 360), (0, 1006));
+        assert_eq!(allocate_panel_widths(2000, 1, 1, 360), (360, 360));
+        assert_eq!(allocate_panel_widths(340, 1, 1, 360), (170, 170));
+    }
 }
