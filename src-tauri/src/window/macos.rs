@@ -153,6 +153,11 @@ fn show_clipboard_panel(app_handle: &AppHandle) -> Result<()> {
                 super::preview::resume_after_clipboard_show();
                 super::emit_visibility(&panel_handle, CLIPBOARD_WINDOW_LABEL, true);
                 super::lifecycle::on_shown(&panel_handle, CLIPBOARD_WINDOW_LABEL);
+                // macOS 的主 NSPanel 延迟显示。副面板必须等真正 show 后再恢复，
+                // 不能在前面的异步排队阶段误判主窗不可见而永久漏显示。
+                if let Err(err) = super::refresh_side_panels_layout(&panel_handle) {
+                    log::warn!("refresh side panels after macOS main show failed: {err}");
+                }
             }
         }) {
             log::warn!("show clipboard panel on main thread failed: {err}");
