@@ -1,6 +1,4 @@
 import { listen } from "@tauri-apps/api/event";
-import { proxy } from "valtio";
-
 import {
   getSettings,
   resetSettings as invokeResetSettings,
@@ -9,6 +7,9 @@ import {
 import { TAURI_EVENT } from "@/constants/events";
 import type { Settings, SettingsPatch } from "@/types/settings";
 import { log } from "@/utils/log";
+import { settingsState } from "./settingsState";
+
+export { settingsState };
 
 /**
  * 设置的本地镜像，真相源在 Rust（`SettingsStore`）。
@@ -22,7 +23,6 @@ import { log } from "@/utils/log";
  *
  * 字面量初值仅为占位；组件层通过 `use(settingsReady)` 挂起到首屏快照灌入后才会读取。
  */
-export const settingsState = proxy<Settings>({} as Settings);
 
 /**
  * 启动期一次性初始化：订阅 Rust 广播 + 拉取首屏快照。

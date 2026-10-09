@@ -11,7 +11,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { TAURI_COMMAND } from "@/constants/commands";
 import i18n from "@/i18n";
-import { settingsState } from "@/stores/settings";
+import { settingsState } from "@/stores/settingsState";
 import type {
   ClipboardAction,
   ClipboardApp,
