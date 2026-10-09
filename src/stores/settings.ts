@@ -41,7 +41,6 @@ const showBootstrapStage = (stage: string) => {
   }
 };
 
-
 /**
  * The main WebView is created hidden. Avoid sending startup IPC while its first
  * frame is still suspended. Other windows keep their existing startup path.
@@ -111,13 +110,16 @@ export const settingsReady: Promise<void> = (async () => {
   const initialRequest = frameReady.then(() => readInitialSettings());
 
   // Register in parallel; buffer early updates and resync if registration is late.
-  void frameReady.then(() => listen<Settings>(TAURI_EVENT.SETTINGS_UPDATED, (event) => {
-    if (!initialLoaded) {
-      bufferedUpdate = event.payload;
-      return;
-    }
-    Object.assign(settingsState, event.payload);
-  }))
+  void frameReady
+    .then(() =>
+      listen<Settings>(TAURI_EVENT.SETTINGS_UPDATED, (event) => {
+        if (!initialLoaded) {
+          bufferedUpdate = event.payload;
+          return;
+        }
+        Object.assign(settingsState, event.payload);
+      }),
+    )
     .then(() => {
       subscriptionReady = true;
       if (initialLoaded) {
