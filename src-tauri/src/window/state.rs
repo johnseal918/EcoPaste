@@ -215,8 +215,14 @@ mod saved_clipboard_width_tests {
 
     #[test]
     fn other_windows_preserve_saved_width_and_invalid_scale_does_not_crash() {
-        assert_eq!(restored_width_with_main_floor("clipboard-pinned", 240, 2.25), 240);
-        assert_eq!(restored_width_with_main_floor("clipboard", 360, f64::NAN), 360);
+        assert_eq!(
+            restored_width_with_main_floor("clipboard-pinned", 240, 2.25),
+            240
+        );
+        assert_eq!(
+            restored_width_with_main_floor("clipboard", 360, f64::NAN),
+            360
+        );
         assert_eq!(restored_width_with_main_floor("clipboard", 360, 0.0), 360);
     }
 }
