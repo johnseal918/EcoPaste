@@ -7,8 +7,8 @@ import {
   updateSettings as invokeUpdateSettings,
 } from "@/commands";
 import { TAURI_EVENT } from "@/constants/events";
-import { log } from "@/utils/log";
 import type { Settings, SettingsPatch } from "@/types/settings";
+import { log } from "@/utils/log";
 
 /**
  * 设置的本地镜像，真相源在 Rust（`SettingsStore`）。
