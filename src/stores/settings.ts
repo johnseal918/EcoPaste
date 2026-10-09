@@ -48,8 +48,11 @@ export const settingsReady: Promise<void> = (async () => {
 
   showBootstrapStage("前端已启动，正在读取本机设置（不会等待事件监听注册）。");
 
-  // Begin listening before the snapshot to preserve normal cross-window updates,
-  // but never put this asynchronous registration on the first-render critical path.
+  // Start the snapshot IPC FIRST. Event registration must never get ahead of
+  // the initial read in an IPC queue while this WebView is waking from hidden.
+  const initialRequest = getSettings();
+
+  // Register in parallel; buffer early updates and resync if registration is late.
   void listen<Settings>(TAURI_EVENT.SETTINGS_UPDATED, (event) => {
     if (!initialLoaded) {
       bufferedUpdate = event.payload;
@@ -75,7 +78,7 @@ export const settingsReady: Promise<void> = (async () => {
     });
 
   try {
-    const initial = await getSettings();
+    const initial = await initialRequest;
     Object.assign(settingsState, initial);
     initialLoaded = true;
 
