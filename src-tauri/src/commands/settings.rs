@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::core::Result;
@@ -7,9 +9,23 @@ use crate::{admin, autostart, shortcut, tray, window};
 /// 与前端 `src/constants/events.ts` 的 `TAURI_EVENT.SETTINGS_UPDATED` 一一对应。
 const SETTINGS_UPDATED_EVENT: &str = "settings://updated";
 
+/// During cold startup the main hidden WebView may send IPC before
+/// settings::init() has installed SettingsStore. Do not panic through the
+/// Tauri IPC dispatcher and abandon the JS Promise; wait a bounded time.
 #[tauri::command]
 pub async fn get_settings(app: AppHandle) -> Result<Settings> {
-    Ok(app.state::<SettingsStore>().snapshot())
+    for attempt in 0..60 {
+        if let Some(store) = app.try_state::<SettingsStore>() {
+            if attempt > 0 {
+                log::info!("get_settings waited {attempt} startup intervals for SettingsStore");
+            }
+            return Ok(store.snapshot());
+        }
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    Err(anyhow::anyhow!("SettingsStore unavailable after 3 seconds of startup").into())
 }
 
 /// 暂停当前全局快捷键注册；用于前端录入快捷键期间避免旧绑定被触发。

@@ -41,25 +41,83 @@ const showBootstrapStage = (stage: string) => {
   }
 };
 
+
+/**
+ * The main WebView is created hidden. Avoid sending startup IPC while its first
+ * frame is still suspended. Other windows keep their existing startup path.
+ */
+const firstSafeFrame = (): Promise<void> => {
+  const hash = window.location.hash;
+  if (hash !== "" && hash !== "#" && hash !== "#/") {
+    return Promise.resolve();
+  }
+
+  showBootstrapStage("等待主窗口首次绘制后读取设置。");
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => {
+      resolve();
+    });
+  });
+};
+
+const SETTINGS_IPC_TIMEOUT_MS = 4_500;
+const SETTINGS_IPC_MAX_ATTEMPTS = 3;
+
+/**
+ * A startup IPC may be sent before Tauri's managed SettingsStore is ready.
+ * Re-issuing this read-only command is safe. Never leave the Suspense gate
+ * pending forever: a bounded failure becomes a visible bootstrap error.
+ */
+const readInitialSettings = async (): Promise<Settings> => {
+  let lastFailure: unknown;
+
+  for (let attempt = 1; attempt <= SETTINGS_IPC_MAX_ATTEMPTS; attempt++) {
+    showBootstrapStage(
+      `正在读取本机设置（第 ${attempt}/${SETTINGS_IPC_MAX_ATTEMPTS} 次）。`,
+    );
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        getSettings(),
+        new Promise<Settings>((_resolve, reject) => {
+          timeout = setTimeout(() => {
+            reject(new Error("get_settings IPC exceeded 4.5 seconds"));
+          }, SETTINGS_IPC_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (error) {
+      lastFailure = error;
+      log.warn("initial settings IPC attempt failed", {
+        attempt,
+        reason: String(error),
+      });
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
+  }
+
+  throw lastFailure ?? new Error("initial settings IPC unavailable");
+};
+
 export const settingsReady: Promise<void> = (async () => {
   let initialLoaded = false;
   let bufferedUpdate: Settings | null = null;
   let subscriptionReady = false;
 
-  showBootstrapStage("前端已启动，正在读取本机设置（不会等待事件监听注册）。");
-
-  // Start the snapshot IPC FIRST. Event registration must never get ahead of
-  // the initial read in an IPC queue while this WebView is waking from hidden.
-  const initialRequest = getSettings();
+  // Hidden main WebViews must wait for the first browser frame before IPC.
+  // Both snapshot retrieval and subscription start only after that point.
+  const frameReady = firstSafeFrame();
+  const initialRequest = frameReady.then(() => readInitialSettings());
 
   // Register in parallel; buffer early updates and resync if registration is late.
-  void listen<Settings>(TAURI_EVENT.SETTINGS_UPDATED, (event) => {
+  void frameReady.then(() => listen<Settings>(TAURI_EVENT.SETTINGS_UPDATED, (event) => {
     if (!initialLoaded) {
       bufferedUpdate = event.payload;
       return;
     }
     Object.assign(settingsState, event.payload);
-  })
+  }))
     .then(() => {
       subscriptionReady = true;
       if (initialLoaded) {
