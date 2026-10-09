@@ -164,7 +164,7 @@ const ClipboardCard: FC<ClipboardCardProps> = (props) => {
         </div>
       ) : null}
 
-      <div className={cn({ "pl-6": Boolean(hintKey) })}>
+      <div>
         {item.note ? (
           <NoteContentSwitcher
             note={item.note}

@@ -108,8 +108,75 @@ fn write_image(
     let image = RustImageData::from_bytes(&bytes).map_err(clip_err)?;
 
     guard.suppress(item.content_hash.clone());
+    #[cfg(target_os = "windows")]
+    {
+        let _ = ctx;
+        write_image_windows(&image)?;
+    }
+    #[cfg(not(target_os = "windows"))]
     ctx.set_image(image).map_err(clip_err)?;
     Ok(())
+}
+
+/// Windows-only image writer: publish PNG + CF_BITMAP under one explicit clipboard lock.
+/// clipboard-rs 0.3.5 treats a failed optional CF_BITMAP publish as total image failure,
+/// even if the PNG format was successfully set. Browsers can paste PNG directly; older
+/// targets can use CF_BITMAP. Do not issue Ctrl+V if neither format was published.
+#[cfg(target_os = "windows")]
+fn write_image_windows(image: &RustImageData) -> Result<()> {
+    use clipboard_win::{options, raw};
+
+    // Finish both potentially expensive encodings BEFORE opening the global clipboard.
+    let png = image.to_png().map_err(clip_err)?;
+    let bitmap = image.to_bitmap().map_err(clip_err)?;
+    let png_format = clipboard_win::register_format("PNG").ok_or_else(|| {
+        AppError::Clipboard("register Windows PNG clipboard format failed".to_owned())
+    })?;
+
+    let _clipboard = open_windows_image_clipboard()?;
+    raw::empty().map_err(|err| {
+        AppError::Clipboard(format!("clear Windows clipboard for image failed: {err}"))
+    })?;
+
+    // Do not let an optional bitmap-format failure invalidate a published PNG, or vice versa.
+    // Both setters are NoClear so adding the second format retains the first.
+    let png_result = raw::set_without_clear(png_format.get(), png.get_bytes());
+    let bitmap_result = raw::set_bitmap_with(bitmap.get_bytes(), options::NoClear);
+
+    match (png_result, bitmap_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Err(err)) => {
+            log::warn!("Windows clipboard CF_BITMAP write failed; PNG is available: {err}");
+            Ok(())
+        }
+        (Err(err), Ok(())) => {
+            log::warn!("Windows clipboard PNG write failed; CF_BITMAP is available: {err}");
+            Ok(())
+        }
+        (Err(png_err), Err(bitmap_err)) => Err(AppError::Clipboard(format!(
+            "Windows clipboard image write failed: PNG={png_err}; CF_BITMAP={bitmap_err}"
+        ))),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn open_windows_image_clipboard() -> Result<clipboard_win::Clipboard> {
+    // The target app, clipboard history services and OS watcher can briefly own
+    // the clipboard. Retry only a bounded period; never clear the old contents
+    // if acquiring the lock ultimately fails.
+    let mut last_error = String::new();
+    for delay_ms in [0, 10, 30, 70, 140] {
+        if delay_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        }
+        match clipboard_win::Clipboard::new_attempts(10) {
+            Ok(clipboard) => return Ok(clipboard),
+            Err(err) => last_error = err.to_string(),
+        }
+    }
+    Err(AppError::Clipboard(format!(
+        "open Windows clipboard for image failed: {last_error}"
+    )))
 }
 
 fn write_files(ctx: &ClipboardContext, guard: &WritebackGuard, item: &ClipboardItem) -> Result<()> {
