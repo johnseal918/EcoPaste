@@ -11,6 +11,18 @@ use crate::core::Result;
 
 const STATE_FILENAME: &str = "window-state.json";
 
+/// 与 tauri.conf.json 中主剪贴板窗口的 minWidth=360（逻辑像素）一致。
+/// 旧窗口状态按物理像素保存，跨 DPI / 版本恢复时不能压缩主窗口。
+const MIN_CLIPBOARD_WIDTH_LOGICAL: f64 = 360.0;
+
+fn restored_width_with_main_floor(label: &str, saved_physical: u32, scale: f64) -> u32 {
+    if label != super::CLIPBOARD_WINDOW_LABEL || !scale.is_finite() || scale <= 0.0 {
+        return saved_physical;
+    }
+    let physical_floor = (MIN_CLIPBOARD_WIDTH_LOGICAL * scale).ceil() as u32;
+    saved_physical.max(physical_floor.max(1))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowState {
     pub x: i32,
@@ -153,8 +165,18 @@ pub fn restore_window_state(app: &AppHandle, label: &str) -> Result<bool> {
         .get_webview_window(label)
         .ok_or_else(|| anyhow::anyhow!("window not found: {label}"))?;
 
+    let scale = window.scale_factor().map_err(|e| anyhow::anyhow!(e))?;
+    let width = restored_width_with_main_floor(label, state.width, scale);
+    if width != state.width {
+        log::warn!(
+            "normalize saved clipboard window width from {} to {} physical px at DPI scale {}",
+            state.width,
+            width,
+            scale
+        );
+    }
     window
-        .set_size(PhysicalSize::new(state.width, state.height))
+        .set_size(PhysicalSize::new(width, state.height))
         .map_err(|e| anyhow::anyhow!(e))?;
 
     let monitors = window
@@ -177,4 +199,24 @@ pub fn restore_window_state(app: &AppHandle, label: &str) -> Result<bool> {
     }
 
     Ok(true)
+}
+
+#[cfg(test)]
+mod saved_clipboard_width_tests {
+    use super::restored_width_with_main_floor;
+
+    #[test]
+    fn old_physical_width_cannot_shrink_clipboard_below_original_logical_minimum() {
+        assert_eq!(restored_width_with_main_floor("clipboard", 360, 1.0), 360);
+        assert_eq!(restored_width_with_main_floor("clipboard", 360, 1.5), 540);
+        assert_eq!(restored_width_with_main_floor("clipboard", 360, 2.25), 810);
+        assert_eq!(restored_width_with_main_floor("clipboard", 970, 2.25), 970);
+    }
+
+    #[test]
+    fn other_windows_preserve_saved_width_and_invalid_scale_does_not_crash() {
+        assert_eq!(restored_width_with_main_floor("clipboard-pinned", 240, 2.25), 240);
+        assert_eq!(restored_width_with_main_floor("clipboard", 360, f64::NAN), 360);
+        assert_eq!(restored_width_with_main_floor("clipboard", 360, 0.0), 360);
+    }
 }

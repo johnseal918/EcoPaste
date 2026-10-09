@@ -543,7 +543,8 @@ fn sync_legacy_right_panel_layout(app_handle: &AppHandle, right_count: usize) ->
         let min_panel_width = (SIDE_PANEL_MIN_WIDTH_LOGICAL * scale).round().max(1.0) as i32;
         let max_panel_width = (SIDE_PANEL_MAX_WIDTH_LOGICAL * scale).round().max(1.0) as i32;
         let per_panel_width = per_panel_available.clamp(min_panel_width, max_panel_width);
-        let pinned_width = (per_panel_width * panel_count as i32).max(1) as u32;
+        let pinned_width =
+            bound_right_panel_viewport(per_panel_width, panel_count, available_side_width);
         let pair_inner_width = main_inner_size.width as i32 + pinned_width as i32;
         let main_inner_x = preferred_main_inner_x
             .min(monitor_right - pair_inner_width)
@@ -578,6 +579,15 @@ fn sync_legacy_right_panel_layout(app_handle: &AppHandle, right_count: usize) ->
         .map_err(|err| anyhow::anyhow!(err))?;
 
     Ok(())
+}
+
+/// 原版单面板有 240–360 逻辑像素首选宽度；空间不足时仅缩小副宿主视口，
+/// 通过已有横向滚动访问全部内容，而不是遮住主窗口或伸出屏幕。
+fn bound_right_panel_viewport(per_panel_width: i32, panel_count: u32, available: i32) -> u32 {
+    per_panel_width
+        .saturating_mul(panel_count as i32)
+        .max(1)
+        .min(available.max(1)) as u32
 }
 
 fn position_side_panel(
@@ -841,7 +851,7 @@ pub fn take_pending_preference_highlight() -> Option<String> {
 
 #[cfg(test)]
 mod side_panel_layout_tests {
-    use super::allocate_panel_widths;
+    use super::{allocate_panel_widths, bound_right_panel_viewport};
 
     #[test]
     fn zero_gap_width_allocation_stays_within_screen() {
@@ -850,5 +860,13 @@ mod side_panel_layout_tests {
         assert_eq!(allocate_panel_widths(1006, 0, 5, 360), (0, 1006));
         assert_eq!(allocate_panel_widths(2000, 1, 1, 360), (360, 360));
         assert_eq!(allocate_panel_widths(340, 1, 1, 360), (170, 170));
+    }
+
+    #[test]
+    fn legacy_right_side_preserves_original_width_when_roomy_but_never_overflows() {
+        assert_eq!(bound_right_panel_viewport(360, 1, 1200), 360);
+        assert_eq!(bound_right_panel_viewport(360, 2, 900), 720);
+        assert_eq!(bound_right_panel_viewport(540, 1, 390), 390);
+        assert_eq!(bound_right_panel_viewport(540, 5, 1000), 1000);
     }
 }
