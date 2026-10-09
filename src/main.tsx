@@ -1,4 +1,4 @@
-import { Component, Suspense, type ErrorInfo, type ReactNode } from "react";
+import { Component, type ErrorInfo, type ReactNode, Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import { log } from "@/utils/log";
 import App from "./App";
@@ -30,9 +30,9 @@ class BootBoundary extends Component<BootBoundaryProps, BootBoundaryState> {
   componentDidCatch(error: Error, info: ErrorInfo) {
     document.getElementById("ecopaste-main-boot")?.remove();
     log.error("EcoPaste main React startup render error", {
+      componentStack: info.componentStack,
       message: error.message,
       name: error.name,
-      componentStack: info.componentStack,
       stack: error.stack,
     });
   }
