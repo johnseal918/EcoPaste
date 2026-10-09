@@ -54,7 +54,7 @@ jobs:
           name: EcoPaste-Windows-x64-ImagePaste-Interop-Fix
           path: src-tauri/target/x86_64-pc-windows-msvc/release/EcoPaste.exe
           if-no-files-found: error
-      - name: Test image format payloads (best effort: Windows CI test runner may lack an entry point)
+      - name: Test image format payloads - best effort on Windows CI
         working-directory: src-tauri
         continue-on-error: true
         timeout-minutes: 4
