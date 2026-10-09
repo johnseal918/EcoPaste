@@ -54,6 +54,31 @@ const WINDOWS_BURST_POLL_INTERVAL: Duration = Duration::from_millis(1);
 #[cfg(target_os = "windows")]
 const WINDOWS_BURST_WINDOW: Duration = Duration::from_secs(2);
 
+/// Empty formats are retryable for a short settling period. This is separate
+/// from sampling frequency: a fast poll does not help if the reader reports a
+/// temporary lock failure as permanently empty.
+#[cfg(target_os = "windows")]
+const WINDOWS_EMPTY_SETTLE_WINDOW: Duration = Duration::from_millis(500);
+#[cfg(target_os = "windows")]
+const WINDOWS_PENDING_RETRY_INTERVAL: Duration = Duration::from_millis(8);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureSnapshot {
+    Queued,
+    Empty,
+    ReadFailed,
+}
+
+/// Only a successfully frozen snapshot may acknowledge a clipboard update.
+/// Stable unsupported/empty formats are eventually skipped with a clear
+/// diagnostic so they do not hold the watcher forever.
+#[cfg(target_os = "windows")]
+fn should_ack_snapshot(outcome: CaptureSnapshot, pending_age: Duration) -> bool {
+    matches!(outcome, CaptureSnapshot::Queued)
+        || (matches!(outcome, CaptureSnapshot::Empty)
+            && pending_age >= WINDOWS_EMPTY_SETTLE_WINDOW)
+}
+
 /// Another clipboard listener can briefly hold the Windows clipboard open. Retry those read
 /// failures within a bounded window before dropping the update.
 const CLIPBOARD_READ_RETRY_DELAYS: [Duration; 5] = [
@@ -70,7 +95,10 @@ fn read_with_retry<T, E>(
 ) -> Result<Option<T>, E> {
     let mut result = read();
     for delay in retry_delays {
-        if result.is_ok() {
+        // An apparently empty Windows clipboard can be a transient snapshot
+        // while a copy application is filling its formats, not a final outcome.
+        // Only a captured payload is final; retry both Err and Ok(None).
+        if matches!(result, Ok(Some(_))) {
             return result;
         }
         std::thread::sleep(*delay);
@@ -286,24 +314,76 @@ fn spawn_watch_thread(
             };
 
             let mut last_sequence = unsafe { GetClipboardSequenceNumber() };
+            // Current clipboard sequence + first-observed instant + next attempt.
+            // The sequence MUST NOT be acknowledged before a valid snapshot.
+            let mut pending: Option<(u32, std::time::Instant, std::time::Instant)> = None;
             let mut burst_until: Option<std::time::Instant> = None;
-
             log::info!("clipboard Windows sequence watcher started");
 
             loop {
                 if pause.is_paused() {
-                    // 暂停期间只追上当前 sequence，不补录暂停时发生的复制。
+                    // Explicit user pause is the only intentional loss of history.
                     last_sequence = unsafe { GetClipboardSequenceNumber() };
+                    pending = None;
                     burst_until = None;
                     std::thread::sleep(Duration::from_millis(25));
                     continue;
                 }
 
                 let sequence = unsafe { GetClipboardSequenceNumber() };
+                let now = std::time::Instant::now();
                 if sequence != 0 && sequence != last_sequence {
-                    last_sequence = sequence;
-                    capture_and_enqueue(&reader, &app, &guard, &store, &app_icon_store, &registry);
-                    burst_until = Some(std::time::Instant::now() + WINDOWS_BURST_WINDOW);
+                    if pending.as_ref().is_none_or(|entry| entry.0 != sequence) {
+                        if let Some((unread, first_seen, _)) = pending.take() {
+                            log::warn!(
+                                "clipboard sequence {unread} was replaced by {sequence} before a readable snapshot (pending {}ms)",
+                                first_seen.elapsed().as_millis()
+                            );
+                        }
+                        pending = Some((sequence, now, now));
+                        burst_until = Some(now + WINDOWS_BURST_WINDOW);
+                    }
+                }
+
+                if let Some((target_sequence, first_seen, next_attempt)) = pending {
+                    if now >= next_attempt {
+                        let outcome = capture_and_enqueue(
+                            &reader,
+                            &app,
+                            &guard,
+                            &store,
+                            &app_icon_store,
+                            &registry,
+                        );
+                        let elapsed = first_seen.elapsed();
+                        if should_ack_snapshot(outcome, elapsed) {
+                            if matches!(outcome, CaptureSnapshot::Empty) {
+                                log::debug!(
+                                    "clipboard sequence {target_sequence}: no enabled/available payload after {}ms",
+                                    elapsed.as_millis()
+                                );
+                            }
+                            last_sequence = target_sequence;
+                            pending = None;
+                        } else {
+                            // Stay pending after busy/empty reads instead of losing
+                            // that sequence. A newer sequence preempts it next loop.
+                            pending = Some((
+                                target_sequence,
+                                first_seen,
+                                std::time::Instant::now() + WINDOWS_PENDING_RETRY_INTERVAL,
+                            ));
+                            if matches!(outcome, CaptureSnapshot::ReadFailed)
+                                && elapsed >= Duration::from_secs(1)
+                                && elapsed < Duration::from_millis(1100)
+                            {
+                                log::warn!(
+                                    "clipboard sequence {target_sequence} unreadable after {}ms; continuing until it changes",
+                                    elapsed.as_millis()
+                                );
+                            }
+                        }
+                    }
                 }
 
                 let in_burst = burst_until.is_some_and(|until| std::time::Instant::now() < until);
@@ -353,7 +433,7 @@ fn capture_and_enqueue(
     store: &ImageStore,
     app_icon_store: &AppIconStore,
     registry: &AppsRegistry,
-) {
+) -> CaptureSnapshot {
     let settings = app
         .try_state::<SettingsStore>()
         .map(|s| s.snapshot())
@@ -364,10 +444,10 @@ fn capture_and_enqueue(
         reader.read_with_capture(&settings.clipboard.capture)
     }) {
         Ok(Some(payload)) => payload,
-        Ok(None) => return,
+        Ok(None) => return CaptureSnapshot::Empty,
         Err(err) => {
-            log::warn!("clipboard watcher: read failed: {err}");
-            return;
+            log::debug!("clipboard watcher: transient snapshot read failed: {err}");
+            return CaptureSnapshot::ReadFailed;
         }
     };
     let captured_at = Utc::now();
@@ -436,10 +516,25 @@ fn capture_and_enqueue(
         };
 
         let pool = app.state::<crate::db::DatabaseState>().pool().await;
-        if let Err(err) = persist_and_notify(&app, &pool, &item, source_app.as_ref()).await {
-            log::error!("clipboard watcher: persist failed: {err}");
+        // A transient SQLite busy/lock error must not silently discard an
+        // already frozen clipboard payload. Never repeat the system read here.
+        for (attempt, delay) in [0u64, 20, 60, 120].into_iter().enumerate() {
+            if delay > 0 {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+            match persist_and_notify(&app, &pool, &item, source_app.as_ref()).await {
+                Ok(_) => return,
+                Err(err) if attempt < 3 => {
+                    log::warn!("clipboard watcher: persist attempt {} failed, will retry: {err}", attempt + 1);
+                }
+                Err(err) => {
+                    log::error!("clipboard watcher: persist failed after 4 attempts: {err}");
+                    return;
+                }
+            }
         }
     });
+    CaptureSnapshot::Queued
 }
 
 #[cfg(test)]
@@ -486,16 +581,40 @@ mod tests {
     }
 
     #[test]
-    fn clipboard_read_retry_does_not_retry_empty_content() {
+    fn clipboard_read_retry_recovers_after_transient_empty() {
         let attempts = Cell::new(0);
 
         let result = read_with_retry(&ZERO_DELAY_RETRIES, || {
             attempts.set(attempts.get() + 1);
-            Ok::<Option<&'static str>, &'static str>(None)
+            if attempts.get() < 3 {
+                Ok::<Option<&'static str>, &'static str>(None)
+            } else {
+                Ok::<Option<&'static str>, &'static str>(Some("ready"))
+            }
         });
 
+        assert_eq!(result, Ok(Some("ready")));
+        assert_eq!(attempts.get(), 3);
+    }
+
+    #[test]
+    fn clipboard_read_retry_exhausts_stable_empty() {
+        let attempts = Cell::new(0);
+        let result = read_with_retry(&ZERO_DELAY_RETRIES, || {
+            attempts.set(attempts.get() + 1);
+            Ok::<Option<&'static str>, &'static str>(None)
+        });
         assert_eq!(result, Ok(None));
-        assert_eq!(attempts.get(), 1);
+        assert_eq!(attempts.get(), 4);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn watcher_only_acks_valid_snapshot_or_stable_unsupported_content() {
+        assert!(should_ack_snapshot(CaptureSnapshot::Queued, Duration::ZERO));
+        assert!(!should_ack_snapshot(CaptureSnapshot::Empty, Duration::from_millis(50)));
+        assert!(should_ack_snapshot(CaptureSnapshot::Empty, Duration::from_millis(501)));
+        assert!(!should_ack_snapshot(CaptureSnapshot::ReadFailed, Duration::from_secs(20)));
     }
 
     #[test]

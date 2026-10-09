@@ -93,9 +93,11 @@ impl ClipboardReader {
 
     /// 读取剪贴板中的文本族表示，包含纯文本、HTML 和 RTF。
     ///
-    /// Windows 走 Clipboard::get 批量读取：clipboard-rs 会只 OpenClipboard 一次，
-    /// 然后在同一个锁内把需要的表示全部拷出。相比逐个 has/get，连续复制时更快，
-    /// 也避免同一次记录的 plain/html/rtf 跨越两次系统剪贴板版本。
+    /// Windows 读取时必须由我们先获得真正的剪贴板锁，再批量读出文本/HTML/RTF。
+    /// clipboard-rs 0.3.5 的 Windows get() 错误地忽略 OpenClipboard 失败，
+    /// 并把格式读取失败变为 Ok([])。由此造成的“空内容”会让 watcher 静默漏记。
+    /// 外层锁确保所有文本表示来自同一版本；若被其它程序占用则向上返回 Err，
+    /// 让 watcher 在尚未确认 sequence 前重试。
     #[cfg(target_os = "windows")]
     fn read_text_payload(&self, capture: &Capture) -> Result<Option<TextPayload>> {
         let mut formats = vec![ContentFormat::Text];
@@ -106,6 +108,15 @@ impl ClipboardReader {
             formats.push(ContentFormat::Rtf);
         }
 
+        // clipboard-rs 0.3.5's get() internally ignores ClipboardWin::new_attempts
+        // failures and then converts each format read failure into an empty result.
+        // The external RAII lock is intentionally acquired first and kept alive
+        // across get(). Its nested open failure is ignored upstream, while the
+        // actual clipboard_win::get calls use our already open clipboard handle.
+        // If acquisition fails, propagate Err instead of a false Ok(None).
+        let _clipboard_lock = clipboard_win::Clipboard::new_attempts(10).map_err(|err| {
+            AppError::Clipboard(format!("Windows clipboard text snapshot busy: {err}"))
+        })?;
         let contents = self.ctx.get(&formats).map_err(clip_err)?;
         let mut text = String::new();
         let mut html = None;

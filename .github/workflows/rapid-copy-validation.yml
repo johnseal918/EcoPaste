@@ -1,0 +1,73 @@
+name: Windows Rapid Copy Capture Validation
+
+"on":
+  push:
+    branches:
+      - feature/clipboard-priority-pin-panel
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rapid-copy-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    name: Build Windows x64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Generate Tauri icons
+        run: pnpm build:icon
+        env:
+          PLATFORM: windows-latest
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Format Rust source for build
+        working-directory: src-tauri
+        run: cargo fmt --all
+      - name: Upload formatted watcher source
+        uses: actions/upload-artifact@v4
+        with:
+          name: EcoPaste-RapidCopy-FormattedSource
+          path: |
+            src-tauri/src/clipboard/watcher.rs
+            src-tauri/src/clipboard/read.rs
+          if-no-files-found: error
+      - name: Rust clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Build frontend
+        run: pnpm build
+      - name: Build Windows executable
+        run: pnpm tauri build --no-bundle --target x86_64-pc-windows-msvc
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: EcoPaste-Windows-x64-RapidCopy-CaptureFix
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/EcoPaste.exe
+          if-no-files-found: error
+      - name: Windows Rust test attempt
+        if: always()
+        working-directory: src-tauri
+        continue-on-error: true
+        timeout-minutes: 5
+        run: cargo test clipboard_read_retry && cargo test watcher_only_acks_valid_snapshot

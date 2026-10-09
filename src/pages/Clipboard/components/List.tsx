@@ -297,6 +297,11 @@ const List: FC = () => {
     clipboardWindowVisibleRef.current = visible;
     if (!visible) return;
 
+    // A dormant/hidden WebView may miss clipboard://updated broadcasts.
+    // Reconcile with the DB on every show, instead of trusting only
+    // notifications received while the window was invisible.
+    deferredReloadRef.current = true;
+
     const {
       scrollToTopOnOpen,
       selectCategoryOnOpen,
@@ -307,7 +312,10 @@ const List: FC = () => {
       selectRangeOnOpen !== WINDOW_OPEN_SELECTION_PRESERVE ||
       selectCategoryOnOpen !== WINDOW_OPEN_SELECTION_PRESERVE ||
       selectGroupOnOpen !== WINDOW_OPEN_SELECTION_PRESERVE;
-    if (!scrollToTopOnOpen && !shouldResetSelection) return;
+    if (!scrollToTopOnOpen && !shouldResetSelection) {
+      consumeDeferredReloadAtTop();
+      return;
+    }
 
     closePreview("windowOpenReset");
 
