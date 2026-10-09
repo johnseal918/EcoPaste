@@ -8,6 +8,33 @@
   </head>
 
   <body>
+    <!-- Main-only fail-visible bootstrap. The companion WebViews use other routes. -->
+    <div
+      id="ecopaste-main-boot"
+      role="status"
+      aria-live="polite"
+      style="display:none;position:fixed;inset:0;z-index:2147483647;box-sizing:border-box;padding:18px;background:#f6f7fa;color:#263546;font:14px/1.65 system-ui,'Microsoft YaHei',sans-serif;flex-direction:column;justify-content:center;align-items:center;text-align:center"
+    >
+      <strong id="ecopaste-boot-title" style="font-size:16px">EcoPaste 主界面正在初始化</strong>
+      <div id="ecopaste-boot-details" style="max-width:92%;margin-top:10px;overflow-wrap:anywhere">正在等待应用设置和页面加载完成。如果长时间停留在这里，说明启动流程尚未完成。</div>
+    </div>
+    <script>
+      (() => {
+        const route = window.location.hash;
+        if (route !== "" && route !== "#" && route !== "#/") return;
+        const boot = document.getElementById("ecopaste-main-boot");
+        const title = document.getElementById("ecopaste-boot-title");
+        const details = document.getElementById("ecopaste-boot-details");
+        boot.style.display = "flex";
+        const fail = (message) => {
+          if (!document.getElementById("ecopaste-main-boot")) return;
+          title.textContent = "EcoPaste 主界面启动异常";
+          details.textContent = String(message || "未知前端错误").slice(0, 350);
+        };
+        window.addEventListener("error", (event) => fail(event.error?.message || event.message));
+        window.addEventListener("unhandledrejection", (event) => fail(event.reason?.message || event.reason));
+      })();
+    </script>
     <div id="root"></div>
     <script src="/src/main.tsx" type="module"></script>
   </body>
