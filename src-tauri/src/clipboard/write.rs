@@ -136,9 +136,7 @@ fn encode_windows_image_formats(image: &RustImageData) -> Result<(Vec<u8>, Vec<u
     const V4_HEADER: usize = 108;
     const V5_HEADER: usize = 124;
     let (width, height) = image.get_size();
-    let invalid = || {
-        AppError::Clipboard("invalid Windows bitmap payload for clipboard".to_owned())
-    };
+    let invalid = || AppError::Clipboard("invalid Windows bitmap payload for clipboard".to_owned());
     if width == 0 || height == 0 || width > i32::MAX as u32 || height > i32::MAX as u32 {
         return Err(invalid());
     }
@@ -246,7 +244,9 @@ fn open_windows_image_clipboard(
             .ok_or_else(|| AppError::Clipboard("main clipboard window not found".to_owned()))?;
         let hwnd = window.hwnd().map_err(clip_err)?;
         if hwnd.0 as isize == 0 {
-            return Err(AppError::Clipboard("main clipboard window handle is NULL".to_owned()));
+            return Err(AppError::Clipboard(
+                "main clipboard window handle is NULL".to_owned(),
+            ));
         }
         hwnd.0 as clipboard_win::types::HWND
     } else {

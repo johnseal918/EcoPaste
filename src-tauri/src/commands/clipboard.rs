@@ -381,7 +381,13 @@ pub async fn write_to_clipboard(
         should_write_plain_for_copy(plain, item.kind, settings.clipboard.content.copy_plain);
     let hide_after_copy = settings.clipboard.content.copy_then_hide_window;
 
-    crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, write_plain, Some(&app))?;
+    crate::clipboard::write_to_clipboard(
+        &store,
+        guard.inner().as_ref(),
+        &item,
+        write_plain,
+        Some(&app),
+    )?;
     mark_item_reused_if_enabled(&app, &pool, &id, item.kind).await?;
 
     if hide_after_copy {
@@ -420,7 +426,13 @@ pub async fn paste_clipboard_item(
         settings.clipboard.content.paste_files_as_path,
     );
 
-    crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, write_plain, Some(&app))?;
+    crate::clipboard::write_to_clipboard(
+        &store,
+        guard.inner().as_ref(),
+        &item,
+        write_plain,
+        Some(&app),
+    )?;
     mark_item_reused_if_enabled(&app, &pool, &id, item.kind).await?;
 
     if window::is_clipboard_window_pinned() {
