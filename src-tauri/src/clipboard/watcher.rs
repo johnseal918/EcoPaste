@@ -75,8 +75,7 @@ enum CaptureSnapshot {
 #[cfg(target_os = "windows")]
 fn should_ack_snapshot(outcome: CaptureSnapshot, pending_age: Duration) -> bool {
     matches!(outcome, CaptureSnapshot::Queued)
-        || (matches!(outcome, CaptureSnapshot::Empty)
-            && pending_age >= WINDOWS_EMPTY_SETTLE_WINDOW)
+        || (matches!(outcome, CaptureSnapshot::Empty) && pending_age >= WINDOWS_EMPTY_SETTLE_WINDOW)
 }
 
 /// Another clipboard listener can briefly hold the Windows clipboard open. Retry those read
@@ -332,17 +331,18 @@ fn spawn_watch_thread(
 
                 let sequence = unsafe { GetClipboardSequenceNumber() };
                 let now = std::time::Instant::now();
-                if sequence != 0 && sequence != last_sequence {
-                    if pending.as_ref().is_none_or(|entry| entry.0 != sequence) {
-                        if let Some((unread, first_seen, _)) = pending.take() {
-                            log::warn!(
-                                "clipboard sequence {unread} was replaced by {sequence} before a readable snapshot (pending {}ms)",
-                                first_seen.elapsed().as_millis()
-                            );
-                        }
-                        pending = Some((sequence, now, now));
-                        burst_until = Some(now + WINDOWS_BURST_WINDOW);
+                if sequence != 0
+                    && sequence != last_sequence
+                    && pending.as_ref().is_none_or(|entry| entry.0 != sequence)
+                {
+                    if let Some((unread, first_seen, _)) = pending.take() {
+                        log::warn!(
+                            "clipboard sequence {unread} was replaced by {sequence} before a readable snapshot (pending {}ms)",
+                            first_seen.elapsed().as_millis()
+                        );
                     }
+                    pending = Some((sequence, now, now));
+                    burst_until = Some(now + WINDOWS_BURST_WINDOW);
                 }
 
                 if let Some((target_sequence, first_seen, next_attempt)) = pending {
@@ -525,7 +525,10 @@ fn capture_and_enqueue(
             match persist_and_notify(&app, &pool, &item, source_app.as_ref()).await {
                 Ok(_) => return,
                 Err(err) if attempt < 3 => {
-                    log::warn!("clipboard watcher: persist attempt {} failed, will retry: {err}", attempt + 1);
+                    log::warn!(
+                        "clipboard watcher: persist attempt {} failed, will retry: {err}",
+                        attempt + 1
+                    );
                 }
                 Err(err) => {
                     log::error!("clipboard watcher: persist failed after 4 attempts: {err}");
@@ -612,9 +615,18 @@ mod tests {
     #[test]
     fn watcher_only_acks_valid_snapshot_or_stable_unsupported_content() {
         assert!(should_ack_snapshot(CaptureSnapshot::Queued, Duration::ZERO));
-        assert!(!should_ack_snapshot(CaptureSnapshot::Empty, Duration::from_millis(50)));
-        assert!(should_ack_snapshot(CaptureSnapshot::Empty, Duration::from_millis(501)));
-        assert!(!should_ack_snapshot(CaptureSnapshot::ReadFailed, Duration::from_secs(20)));
+        assert!(!should_ack_snapshot(
+            CaptureSnapshot::Empty,
+            Duration::from_millis(50)
+        ));
+        assert!(should_ack_snapshot(
+            CaptureSnapshot::Empty,
+            Duration::from_millis(501)
+        ));
+        assert!(!should_ack_snapshot(
+            CaptureSnapshot::ReadFailed,
+            Duration::from_secs(20)
+        ));
     }
 
     #[test]
