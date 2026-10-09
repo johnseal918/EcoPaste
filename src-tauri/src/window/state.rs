@@ -237,16 +237,31 @@ mod saved_clipboard_width_tests {
     fn restore_clipboard_height_in_logical_pixels_across_dpi_scales() {
         assert_eq!(restored_height_with_main_floor("clipboard", 600, 1.0), 600);
         assert_eq!(restored_height_with_main_floor("clipboard", 600, 1.5), 900);
-        assert_eq!(restored_height_with_main_floor("clipboard", 600, 2.25), 1350);
+        assert_eq!(
+            restored_height_with_main_floor("clipboard", 600, 2.25),
+            1350
+        );
         assert_eq!(restored_height_with_main_floor("clipboard", 400, 1.0), 600);
-        assert_eq!(restored_height_with_main_floor("clipboard", 1150, 1.5), 1150);
+        assert_eq!(
+            restored_height_with_main_floor("clipboard", 1150, 1.5),
+            1150
+        );
     }
 
     #[test]
     fn other_windows_preserve_saved_height_and_invalid_scale_does_not_crash() {
-        assert_eq!(restored_height_with_main_floor("clipboard-pinned", 400, 1.5), 400);
-        assert_eq!(restored_height_with_main_floor("clipboard-side-left", 400, 1.5), 400);
-        assert_eq!(restored_height_with_main_floor("clipboard", 400, f64::NAN), 400);
+        assert_eq!(
+            restored_height_with_main_floor("clipboard-pinned", 400, 1.5),
+            400
+        );
+        assert_eq!(
+            restored_height_with_main_floor("clipboard-side-left", 400, 1.5),
+            400
+        );
+        assert_eq!(
+            restored_height_with_main_floor("clipboard", 400, f64::NAN),
+            400
+        );
         assert_eq!(restored_height_with_main_floor("clipboard", 400, 0.0), 400);
     }
 
