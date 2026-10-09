@@ -14,12 +14,23 @@ const STATE_FILENAME: &str = "window-state.json";
 /// 与 tauri.conf.json 中主剪贴板窗口的 minWidth=360（逻辑像素）一致。
 /// 旧窗口状态按物理像素保存，跨 DPI / 版本恢复时不能压缩主窗口。
 const MIN_CLIPBOARD_WIDTH_LOGICAL: f64 = 360.0;
+/// 与 tauri.conf.json 的 minHeight=600（逻辑像素）一致。
+/// 保存过的物理像素高度不能在 Windows DPI 提升后缩成更小的逻辑高度。
+const MIN_CLIPBOARD_HEIGHT_LOGICAL: f64 = 600.0;
 
 fn restored_width_with_main_floor(label: &str, saved_physical: u32, scale: f64) -> u32 {
     if label != super::CLIPBOARD_WINDOW_LABEL || !scale.is_finite() || scale <= 0.0 {
         return saved_physical;
     }
     let physical_floor = (MIN_CLIPBOARD_WIDTH_LOGICAL * scale).ceil() as u32;
+    saved_physical.max(physical_floor.max(1))
+}
+
+fn restored_height_with_main_floor(label: &str, saved_physical: u32, scale: f64) -> u32 {
+    if label != super::CLIPBOARD_WINDOW_LABEL || !scale.is_finite() || scale <= 0.0 {
+        return saved_physical;
+    }
+    let physical_floor = (MIN_CLIPBOARD_HEIGHT_LOGICAL * scale).ceil() as u32;
     saved_physical.max(physical_floor.max(1))
 }
 
@@ -175,8 +186,17 @@ pub fn restore_window_state(app: &AppHandle, label: &str) -> Result<bool> {
             scale
         );
     }
+    let height = restored_height_with_main_floor(label, state.height, scale);
+    if height != state.height {
+        log::warn!(
+            "normalize saved clipboard window height from {} to {} physical px at DPI scale {}",
+            state.height,
+            height,
+            scale
+        );
+    }
     window
-        .set_size(PhysicalSize::new(width, state.height))
+        .set_size(PhysicalSize::new(width, height))
         .map_err(|e| anyhow::anyhow!(e))?;
 
     let monitors = window
@@ -203,7 +223,7 @@ pub fn restore_window_state(app: &AppHandle, label: &str) -> Result<bool> {
 
 #[cfg(test)]
 mod saved_clipboard_width_tests {
-    use super::restored_width_with_main_floor;
+    use super::{restored_height_with_main_floor, restored_width_with_main_floor};
 
     #[test]
     fn old_physical_width_cannot_shrink_clipboard_below_original_logical_minimum() {
@@ -211,6 +231,23 @@ mod saved_clipboard_width_tests {
         assert_eq!(restored_width_with_main_floor("clipboard", 360, 1.5), 540);
         assert_eq!(restored_width_with_main_floor("clipboard", 360, 2.25), 810);
         assert_eq!(restored_width_with_main_floor("clipboard", 970, 2.25), 970);
+    }
+
+    #[test]
+    fn restore_clipboard_height_in_logical_pixels_across_dpi_scales() {
+        assert_eq!(restored_height_with_main_floor("clipboard", 600, 1.0), 600);
+        assert_eq!(restored_height_with_main_floor("clipboard", 600, 1.5), 900);
+        assert_eq!(restored_height_with_main_floor("clipboard", 600, 2.25), 1350);
+        assert_eq!(restored_height_with_main_floor("clipboard", 400, 1.0), 600);
+        assert_eq!(restored_height_with_main_floor("clipboard", 1150, 1.5), 1150);
+    }
+
+    #[test]
+    fn other_windows_preserve_saved_height_and_invalid_scale_does_not_crash() {
+        assert_eq!(restored_height_with_main_floor("clipboard-pinned", 400, 1.5), 400);
+        assert_eq!(restored_height_with_main_floor("clipboard-side-left", 400, 1.5), 400);
+        assert_eq!(restored_height_with_main_floor("clipboard", 400, f64::NAN), 400);
+        assert_eq!(restored_height_with_main_floor("clipboard", 400, 0.0), 400);
     }
 
     #[test]
