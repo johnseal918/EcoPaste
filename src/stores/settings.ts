@@ -7,6 +7,7 @@ import {
   updateSettings as invokeUpdateSettings,
 } from "@/commands";
 import { TAURI_EVENT } from "@/constants/events";
+import { log } from "@/utils/log";
 import type { Settings, SettingsPatch } from "@/types/settings";
 
 /**
@@ -28,14 +29,67 @@ export const settingsState = proxy<Settings>({} as Settings);
  * 模块导入即开跑，由 React `use(settingsReady)` 在 Suspense 中等待完成。
  * 每个 webview 加载本模块一次，因此事件订阅天然单例。
  */
+/**
+ * Loading the initial settings must not be blocked by an event-listener registration.
+ * A hidden WebView may delay registration; the main UI still needs its first snapshot.
+ */
+const showBootstrapStage = (stage: string) => {
+  const status = document.getElementById("ecopaste-main-boot");
+  const details = document.getElementById("ecopaste-boot-details");
+  if (status?.style.display === "flex" && details) {
+    details.textContent = stage;
+  }
+};
+
 export const settingsReady: Promise<void> = (async () => {
-  await listen<Settings>(TAURI_EVENT.SETTINGS_UPDATED, (event) => {
+  let initialLoaded = false;
+  let bufferedUpdate: Settings | null = null;
+  let subscriptionReady = false;
+
+  showBootstrapStage("前端已启动，正在读取本机设置（不会等待事件监听注册）。");
+
+  // Begin listening before the snapshot to preserve normal cross-window updates,
+  // but never put this asynchronous registration on the first-render critical path.
+  void listen<Settings>(TAURI_EVENT.SETTINGS_UPDATED, (event) => {
+    if (!initialLoaded) {
+      bufferedUpdate = event.payload;
+      return;
+    }
     Object.assign(settingsState, event.payload);
-  });
+  })
+    .then(() => {
+      subscriptionReady = true;
+      if (initialLoaded) {
+        // Close the subscribe/snapshot race if registration completed late.
+        void getSettings()
+          .then((latest) => {
+            Object.assign(settingsState, latest);
+          })
+          .catch((error) => {
+            log.error("settings post-subscribe resync failed", error);
+          });
+      }
+    })
+    .catch((error) => {
+      log.error("settings updates listener registration failed", error);
+    });
 
-  const initial = await getSettings();
+  try {
+    const initial = await getSettings();
+    Object.assign(settingsState, initial);
+    initialLoaded = true;
 
-  Object.assign(settingsState, initial);
+    if (bufferedUpdate) {
+      Object.assign(settingsState, bufferedUpdate);
+      bufferedUpdate = null;
+    }
+    showBootstrapStage("本机设置读取完成，正在渲染剪贴板主界面。");
+    log.info("settings initial snapshot ready", { subscriptionReady });
+  } catch (error) {
+    showBootstrapStage(`读取本机设置失败：${String(error)}`);
+    log.error("settings initial snapshot failed", error);
+    throw error;
+  }
 })();
 
 /**
