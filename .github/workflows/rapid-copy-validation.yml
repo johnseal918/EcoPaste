@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: rapid-copy-acceptance-${{ github.ref }}
+  group: rapid-copy-acceptance-v2-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
