@@ -10,32 +10,46 @@ struct MonitorInfo {
     size: PhysicalSize<u32>,
 }
 
+fn is_on_monitor(m: &tauri::Monitor, x: f64, y: f64) -> bool {
+    let origin = m.position();
+    x >= f64::from(origin.x)
+        && x < f64::from(origin.x) + f64::from(m.size().width)
+        && y >= f64::from(origin.y)
+        && y < f64::from(origin.y) + f64::from(m.size().height)
+}
+
+/// Shared monitor lookup for the original positioning flow and the one-time
+/// fit performed before showing a window. Coordinates are physical pixels.
+pub(super) fn select_monitor(
+    window: &WebviewWindow,
+    position: WindowPosition,
+    saved: Option<PhysicalPosition<i32>>,
+) -> Result<Option<tauri::Monitor>> {
+    let monitors = window.available_monitors().map_err(|e| anyhow::anyhow!(e))?;
+    let cursor = window.cursor_position().ok();
+    let at_cursor = cursor.and_then(|c| {
+        monitors.iter().find(|m| is_on_monitor(m, c.x, c.y))
+    });
+    let at_saved = saved.and_then(|p| {
+        monitors.iter().find(|m| is_on_monitor(m, f64::from(p.x), f64::from(p.y)))
+    });
+    let selected = if matches!(position, WindowPosition::Remember) {
+        at_saved.or(at_cursor)
+    } else {
+        at_cursor.or(at_saved)
+    };
+    if let Some(monitor) = selected {
+        return Ok(Some(monitor.clone()));
+    }
+    Ok(window.current_monitor().map_err(|e| anyhow::anyhow!(e))?
+        .or(window.primary_monitor().map_err(|e| anyhow::anyhow!(e))?))
+}
+
 fn monitor_from_cursor(
     window: &WebviewWindow,
 ) -> Result<Option<(MonitorInfo, PhysicalPosition<f64>)>> {
     let cursor = window.cursor_position().map_err(|e| anyhow::anyhow!(e))?;
-    // cursor_position and Monitor.position are both PHYSICAL pixels. Do not
-    // turn the cursor into logical units using a potentially stale DPI factor
-    // after a remote desktop changes monitor resolution or scale.
-    let monitors = window
-        .available_monitors()
-        .map_err(|e| anyhow::anyhow!(e))?;
-    let monitor = monitors.into_iter().find(|monitor| {
-        let left = f64::from(monitor.position().x);
-        let top = f64::from(monitor.position().y);
-        cursor.x >= left
-            && cursor.x < left + f64::from(monitor.size().width)
-            && cursor.y >= top
-            && cursor.y < top + f64::from(monitor.size().height)
-    });
-    let monitor = match monitor {
-        Some(monitor) => Some(monitor),
-        None => window
-            .current_monitor()
-            .map_err(|e| anyhow::anyhow!(e))?
-            .or(window.primary_monitor().map_err(|e| anyhow::anyhow!(e))?),
-    };
-    let Some(monitor) = monitor else {
+    let Some(monitor) = select_monitor(window, WindowPosition::FollowCursor, None)? else {
         return Ok(None);
     };
     let work = monitor.work_area();
@@ -69,7 +83,8 @@ fn apply_follow(
     monitor: &MonitorInfo,
     cursor: &PhysicalPosition<f64>,
 ) -> Result<()> {
-    let win_size = window.inner_size().map_err(|e| anyhow::anyhow!(e))?;
+    // Position the whole outer window, not only the webview's inner content.
+    let win_size = window.outer_size().map_err(|e| anyhow::anyhow!(e))?;
     let mon_x = f64::from(monitor.position.x);
     let mon_y = f64::from(monitor.position.y);
     let x = bounded_origin(
@@ -100,7 +115,8 @@ pub(super) fn center_on_cursor_monitor(window: &WebviewWindow) -> Result<()> {
 }
 
 fn apply_center(window: &WebviewWindow, monitor: &MonitorInfo) -> Result<()> {
-    let win_size = window.inner_size().map_err(|e| anyhow::anyhow!(e))?;
+    // Position the whole outer window, not only the webview's inner content.
+    let win_size = window.outer_size().map_err(|e| anyhow::anyhow!(e))?;
     let mon_x = f64::from(monitor.position.x);
     let mon_y = f64::from(monitor.position.y);
     let x = bounded_origin(
