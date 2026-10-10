@@ -579,8 +579,7 @@ fn sync_legacy_right_panel_layout(app_handle: &AppHandle, right_count: usize) ->
     // In a high-DPI small remote desktop even 420 logical pixels may not
     // fit. Do not let the companion's static minHeight force it below the
     // visible main window; normal displays keep the configured minimum.
-    let min_pinned_height =
-        ((420.0 * scale).ceil() as u32).min(main_inner_size.height);
+    let min_pinned_height = ((420.0 * scale).ceil() as u32).min(main_inner_size.height);
     pinned
         .set_min_size(Some(PhysicalSize::new(1, min_pinned_height)))
         .map_err(|err| anyhow::anyhow!(err))?;

@@ -25,13 +25,15 @@ pub(super) fn select_monitor(
     position: WindowPosition,
     saved: Option<PhysicalPosition<i32>>,
 ) -> Result<Option<tauri::Monitor>> {
-    let monitors = window.available_monitors().map_err(|e| anyhow::anyhow!(e))?;
+    let monitors = window
+        .available_monitors()
+        .map_err(|e| anyhow::anyhow!(e))?;
     let cursor = window.cursor_position().ok();
-    let at_cursor = cursor.and_then(|c| {
-        monitors.iter().find(|m| is_on_monitor(m, c.x, c.y))
-    });
+    let at_cursor = cursor.and_then(|c| monitors.iter().find(|m| is_on_monitor(m, c.x, c.y)));
     let at_saved = saved.and_then(|p| {
-        monitors.iter().find(|m| is_on_monitor(m, f64::from(p.x), f64::from(p.y)))
+        monitors
+            .iter()
+            .find(|m| is_on_monitor(m, f64::from(p.x), f64::from(p.y)))
     });
     let selected = if matches!(position, WindowPosition::Remember) {
         at_saved.or(at_cursor)
@@ -41,7 +43,9 @@ pub(super) fn select_monitor(
     if let Some(monitor) = selected {
         return Ok(Some(monitor.clone()));
     }
-    Ok(window.current_monitor().map_err(|e| anyhow::anyhow!(e))?
+    Ok(window
+        .current_monitor()
+        .map_err(|e| anyhow::anyhow!(e))?
         .or(window.primary_monitor().map_err(|e| anyhow::anyhow!(e))?))
 }
 

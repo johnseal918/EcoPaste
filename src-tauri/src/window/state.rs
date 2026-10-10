@@ -151,7 +151,12 @@ impl WorkArea {
     fn from_monitor(monitor: &tauri::Monitor) -> Self {
         let area = monitor.work_area();
         let (x, y, width, height) = if area.size.width > 0 && area.size.height > 0 {
-            (area.position.x, area.position.y, area.size.width, area.size.height)
+            (
+                area.position.x,
+                area.position.y,
+                area.size.width,
+                area.size.height,
+            )
         } else {
             (
                 monitor.position().x,
@@ -161,12 +166,22 @@ impl WorkArea {
             )
         };
         let scale = valid_scale(monitor.scale_factor());
-        Self { x, y, width, height, scale }
+        Self {
+            x,
+            y,
+            width,
+            height,
+            scale,
+        }
     }
 }
 
 fn valid_scale(scale: f64) -> f64 {
-    if scale.is_finite() && scale > 0.0 { scale } else { 1.0 }
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
 }
 
 fn valid_preference(value: Option<f64>) -> Option<f64> {
@@ -207,12 +222,18 @@ fn fitted_size(
     frame: PhysicalSize<u32>,
 ) -> (PhysicalSize<u32>, PhysicalSize<u32>) {
     let margin = (FIT_MARGIN_LOGICAL * work.scale).ceil() as u32;
-    let available_w = work.width.saturating_sub(frame.width).saturating_sub(margin).max(1);
-    let available_h = work.height.saturating_sub(frame.height).saturating_sub(margin).max(1);
-    let min_w = ((DEFAULT_WIDTH_LOGICAL * work.scale).ceil() as u32)
-        .min(available_w);
-    let min_h = ((MIN_HEIGHT_LOGICAL * work.scale).ceil() as u32)
-        .min(available_h);
+    let available_w = work
+        .width
+        .saturating_sub(frame.width)
+        .saturating_sub(margin)
+        .max(1);
+    let available_h = work
+        .height
+        .saturating_sub(frame.height)
+        .saturating_sub(margin)
+        .max(1);
+    let min_w = ((DEFAULT_WIDTH_LOGICAL * work.scale).ceil() as u32).min(available_w);
+    let min_h = ((MIN_HEIGHT_LOGICAL * work.scale).ceil() as u32).min(available_h);
     let width = ((preferred.0 * work.scale).round() as u32).clamp(min_w, available_w);
     let height = ((preferred.1 * work.scale).round() as u32).clamp(min_h, available_h);
     (
@@ -247,17 +268,22 @@ fn restore_other_window(window: &WebviewWindow, state: &WindowState) -> Result<(
     window
         .set_size(PhysicalSize::new(state.width, state.height))
         .map_err(|e| anyhow::anyhow!(e))?;
-    let monitors = window.available_monitors().map_err(|e| anyhow::anyhow!(e))?;
+    let monitors = window
+        .available_monitors()
+        .map_err(|e| anyhow::anyhow!(e))?;
     let on_screen = monitors.iter().any(|m| {
         let x = i64::from(state.x);
         let y = i64::from(state.y);
         let mx = i64::from(m.position().x);
         let my = i64::from(m.position().y);
-        x >= mx && x < mx + i64::from(m.size().width)
-            && y >= my && y < my + i64::from(m.size().height)
+        x >= mx
+            && x < mx + i64::from(m.size().width)
+            && y >= my
+            && y < my + i64::from(m.size().height)
     });
     if on_screen {
-        window.set_position(PhysicalPosition::new(state.x, state.y))
+        window
+            .set_position(PhysicalPosition::new(state.x, state.y))
             .map_err(|e| anyhow::anyhow!(e))?;
     } else {
         super::position::center_on_cursor_monitor(window)?;
@@ -269,7 +295,8 @@ fn restore_other_window(window: &WebviewWindow, state: &WindowState) -> Result<(
 /// by comparing the last applied physical dimensions, and do not let an
 /// automatic small-monitor fit overwrite the preferred logical size.
 pub fn save_window_state(app: &AppHandle, label: &str) -> Result<()> {
-    let window = app.get_webview_window(label)
+    let window = app
+        .get_webview_window(label)
         .ok_or_else(|| anyhow::anyhow!("window not found: {label}"))?;
     let pos = window.outer_position().map_err(|e| anyhow::anyhow!(e))?;
     let size = window.inner_size().map_err(|e| anyhow::anyhow!(e))?;
@@ -312,7 +339,10 @@ pub fn save_window_state(app: &AppHandle, label: &str) -> Result<()> {
     store.save(
         label,
         WindowState {
-            x: pos.x, y: pos.y, width: size.width, height: size.height,
+            x: pos.x,
+            y: pos.y,
+            width: size.width,
+            height: size.height,
             sizing_version: if is_main { 3 } else { 0 },
             preferred_width_logical: pref.map(|p| p.0),
             preferred_height_logical: pref.map(|p| p.1),
@@ -327,16 +357,20 @@ pub fn save_window_state(app: &AppHandle, label: &str) -> Result<()> {
 pub fn restore_window_state(app: &AppHandle, label: &str) -> Result<bool> {
     let store = app.state::<WindowStateStore>();
     let saved = store.get(label);
-    let window = app.get_webview_window(label)
+    let window = app
+        .get_webview_window(label)
         .ok_or_else(|| anyhow::anyhow!("window not found: {label}"))?;
 
     if label != super::CLIPBOARD_WINDOW_LABEL || !cfg!(target_os = "windows") {
-        let Some(state) = saved else { return Ok(false); };
+        let Some(state) = saved else {
+            return Ok(false);
+        };
         restore_other_window(&window, &state)?;
         return Ok(true);
     }
 
-    let policy = app.try_state::<SettingsStore>()
+    let policy = app
+        .try_state::<SettingsStore>()
         .map(|s| s.snapshot().clipboard.window.position)
         .unwrap_or(WindowPosition::FollowCursor);
     let saved_position = saved.as_ref().map(|s| PhysicalPosition::new(s.x, s.y));
@@ -348,21 +382,27 @@ pub fn restore_window_state(app: &AppHandle, label: &str) -> Result<bool> {
     let preferred = preferred_size(saved.as_ref(), work.scale);
     let (wanted, minimum) = fitted_size(work, preferred, frame_size(&window)?);
 
-    window.set_min_size(Some(minimum)).map_err(|e| anyhow::anyhow!(e))?;
+    window
+        .set_min_size(Some(minimum))
+        .map_err(|e| anyhow::anyhow!(e))?;
     window.set_size(wanted).map_err(|e| anyhow::anyhow!(e))?;
     let size = window.inner_size().map_err(|e| anyhow::anyhow!(e))?;
-    let desired_origin = saved_position
-        .unwrap_or(PhysicalPosition::new(work.x, work.y));
+    let desired_origin = saved_position.unwrap_or(PhysicalPosition::new(work.x, work.y));
     let origin = clamp_outer_position(
         desired_origin,
         window.outer_size().map_err(|e| anyhow::anyhow!(e))?,
         work,
     );
-    window.set_position(origin).map_err(|e| anyhow::anyhow!(e))?;
+    window
+        .set_position(origin)
+        .map_err(|e| anyhow::anyhow!(e))?;
     store.save(
         label,
         WindowState {
-            x: origin.x, y: origin.y, width: size.width, height: size.height,
+            x: origin.x,
+            y: origin.y,
+            width: size.width,
+            height: size.height,
             sizing_version: 3,
             preferred_width_logical: Some(preferred.0),
             preferred_height_logical: Some(preferred.1),
@@ -370,7 +410,9 @@ pub fn restore_window_state(app: &AppHandle, label: &str) -> Result<bool> {
         },
     )?;
     if size != wanted {
-        log::warn!("clipboard size constrained by window system: expected {wanted:?}, got {size:?}");
+        log::warn!(
+            "clipboard size constrained by window system: expected {wanted:?}, got {size:?}"
+        );
     }
     Ok(saved.is_some())
 }
@@ -386,7 +428,8 @@ pub fn refit_visible_main_if_clipped(app: &AppHandle) -> Result<bool> {
         return Ok(false);
     }
     let pos = window.outer_position().map_err(|e| anyhow::anyhow!(e))?;
-    let policy = app.try_state::<SettingsStore>()
+    let policy = app
+        .try_state::<SettingsStore>()
         .map(|s| s.snapshot().clipboard.window.position)
         .unwrap_or(WindowPosition::FollowCursor);
     let Some(monitor) = super::position::select_monitor(&window, policy, Some(pos))? else {
@@ -395,7 +438,8 @@ pub fn refit_visible_main_if_clipped(app: &AppHandle) -> Result<bool> {
     let work = WorkArea::from_monitor(&monitor);
     let outer = window.outer_size().map_err(|e| anyhow::anyhow!(e))?;
     let clipped = clamp_outer_position(pos, outer, work) != pos
-        || outer.width > work.width || outer.height > work.height;
+        || outer.width > work.width
+        || outer.height > work.height;
     if clipped {
         restore_window_state(app, super::CLIPBOARD_WINDOW_LABEL)?;
     }
@@ -404,11 +448,17 @@ pub fn refit_visible_main_if_clipped(app: &AppHandle) -> Result<bool> {
 
 #[cfg(test)]
 mod fit_tests {
-    use super::{clamp_outer_position, fitted_size, preferred_size, WorkArea, WindowState};
+    use super::{clamp_outer_position, fitted_size, preferred_size, WindowState, WorkArea};
     use tauri::{PhysicalPosition, PhysicalSize};
 
     fn area(w: u32, h: u32, dpi: f64) -> WorkArea {
-        WorkArea { x: 0, y: 0, width: w, height: h, scale: dpi }
+        WorkArea {
+            x: 0,
+            y: 0,
+            width: w,
+            height: h,
+            scale: dpi,
+        }
     }
 
     #[test]
@@ -436,7 +486,8 @@ mod fit_tests {
         let work = area(1366, 728, 1.25);
         let pos = clamp_outer_position(
             PhysicalPosition::new(1800, 800),
-            PhysicalSize::new(450, 625), work,
+            PhysicalSize::new(450, 625),
+            work,
         );
         assert_eq!(pos, PhysicalPosition::new(916, 103));
     }
@@ -447,11 +498,11 @@ mod fit_tests {
             r#"{"x":12,"y":25,"width":450,"height":625,"sizing_version":3,
                 "preferred_width_logical":440.0,"preferred_height_logical":850.0,
                 "saved_scale_factor":1.25}"#,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(preferred_size(Some(&modern), 2.0), (440.0, 850.0));
-        let legacy: WindowState = serde_json::from_str(
-            r#"{"x":0,"y":0,"width":900,"height":900}"#,
-        ).unwrap();
+        let legacy: WindowState =
+            serde_json::from_str(r#"{"x":0,"y":0,"width":900,"height":900}"#).unwrap();
         assert_eq!(preferred_size(Some(&legacy), 1.5), (360.0, 500.0));
     }
 
@@ -461,7 +512,8 @@ mod fit_tests {
             r#"{"x":0,"y":0,"width":800,"height":800,
                 "sizing_version":3,"preferred_width_logical":640.0,
                 "preferred_height_logical":640.0,"saved_scale_factor":1.25}"#,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(preferred_size(Some(&modern), 1.5), (640.0, 640.0));
     }
 }
