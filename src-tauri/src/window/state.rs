@@ -389,12 +389,24 @@ mod compact_window_restoration_tests {
     #[test]
     fn v2_resets_oversized_saved_main_width_to_original_default_once() {
         // Screenshot: old saved width is larger than the original default.
-        assert_eq!(restored_width_by_state_version("clipboard", 548, 1.25, 1), 450);
-        assert_eq!(restored_width_by_state_version("clipboard", 548, 1.20, 1), 432);
+        assert_eq!(
+            restored_width_by_state_version("clipboard", 548, 1.25, 1),
+            450
+        );
+        assert_eq!(
+            restored_width_by_state_version("clipboard", 548, 1.20, 1),
+            432
+        );
         // The original 360-DIP default at 150% is already 540 physical px.
-        assert_eq!(restored_width_by_state_version("clipboard", 540, 1.5, 0), 540);
+        assert_eq!(
+            restored_width_by_state_version("clipboard", 540, 1.5, 0),
+            540
+        );
         // A user resize made after v2 must persist, including a larger width.
-        assert_eq!(restored_width_by_state_version("clipboard", 548, 1.25, 2), 548);
+        assert_eq!(
+            restored_width_by_state_version("clipboard", 548, 1.25, 2),
+            548
+        );
         // Side panel sizes follow their own layout code; do not normalize.
         assert_eq!(
             restored_width_by_state_version("clipboard-pinned", 430, 1.25, 0),
@@ -404,11 +416,23 @@ mod compact_window_restoration_tests {
 
     #[test]
     fn v2_resets_oversized_height_even_when_legacy_marked_version_one() {
-        assert_eq!(restored_height_by_state_version("clipboard", 904, 1.25, 1), 625);
-        assert_eq!(restored_height_by_state_version("clipboard", 904, 1.20, 1), 600);
-        assert_eq!(restored_height_by_state_version("clipboard", 904, 1.25, 2), 904);
+        assert_eq!(
+            restored_height_by_state_version("clipboard", 904, 1.25, 1),
+            625
+        );
+        assert_eq!(
+            restored_height_by_state_version("clipboard", 904, 1.20, 1),
+            600
+        );
+        assert_eq!(
+            restored_height_by_state_version("clipboard", 904, 1.25, 2),
+            904
+        );
         // Do not expand a legitimate already-compact legacy height.
-        assert_eq!(restored_height_by_state_version("clipboard", 550, 1.25, 1), 550);
+        assert_eq!(
+            restored_height_by_state_version("clipboard", 550, 1.25, 1),
+            550
+        );
     }
 
     #[test]
