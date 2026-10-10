@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use anyhow::Context;
 use blake3::Hasher;
 use chrono::Utc;
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
+use tokio::sync::Mutex;
 
 use crate::core::Result;
 use crate::db::models::{
@@ -64,10 +67,17 @@ fn kind_tag(kind: ClipboardKind) -> &'static str {
     }
 }
 
-/// 入库主入口：按 `item.content_hash` 去重。
-/// 命中已有记录 → 复用 [`increment_item_use_count`] 累加并刷新 `updated_at`，不插入新行；
-/// 未命中 → 调用 [`insert_item`] 插入。返回生效行 id 与是否去重。
+/// Serialize check + insert: the capture watcher can enqueue multiple async
+/// persistence tasks from consecutive copies. Without this gate, two tasks
+/// can both SELECT "absent" and INSERT duplicate cards with different IDs.
+/// All writes in one EcoPaste process use this shared gate.
+static UPSERT_GATE: Mutex<()> = Mutex::const_new(());
+
+/// 入库主入口：图片/文件按原始内容指纹去重；文本额外比较真正展示的完整纯文本。
+/// 同样的可见文本可能分别来自 HTML/RTF/plain，原始格式字节不同，
+/// 但历史卡片不应因此出现多条。禁止用截断的 summary 进行去重。
 pub async fn upsert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<UpsertResult> {
+    let _serial = UPSERT_GATE.lock().await;
     if let Some(existing) = find_item_by_content_hash(pool, &item.content_hash).await? {
         increment_item_use_count(pool, &existing.id).await?;
         return Ok(UpsertResult {
@@ -76,11 +86,80 @@ pub async fn upsert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<Upse
         });
     }
 
+    if item.kind == ClipboardKind::Text {
+        if let Some(plain) = item.search_text.as_deref().filter(|s| !s.is_empty()) {
+            // FULL search_text, never short summary: false matches would destroy
+            // distinct copied paragraphs with identical first 256 characters.
+            let existing_id = sqlx::query_scalar::<_, String>(
+                "SELECT id FROM clipboard_items \
+                 WHERE kind = 'text' AND search_text = ? \
+                 ORDER BY is_pinned DESC, is_favorite DESC, updated_at DESC, id ASC LIMIT 1",
+            )
+            .bind(plain)
+            .fetch_optional(pool)
+            .await
+            .context("failed to find same visible text")?;
+            if let Some(existing_id) = existing_id {
+                increment_item_use_count(pool, &existing_id).await?;
+                return Ok(UpsertResult {
+                    id: existing_id,
+                    deduplicated: true,
+                });
+            }
+        }
+    }
+
     insert_item(pool, item).await?;
     Ok(UpsertResult {
         id: item.id.clone(),
         deduplicated: false,
     })
+}
+
+/// One-time-safe reconciliation for pre-existing duplicates from the old
+/// rich-format/raw-hash policy or concurrent asynchronous writes. Only
+/// untouched ordinary history with the same full text AND same group is
+/// eligible; favorite, pinned, manually ordered, annotated and sensitive
+/// entries are never deleted automatically. Preserve total use_count and
+/// the newest representative's full-format content.
+pub async fn consolidate_safe_text_duplicates(pool: &SqlitePool) -> Result<u64> {
+    let _serial = UPSERT_GATE.lock().await;
+    let mut tx = pool.begin().await.context("begin text dedup transaction")?;
+    let rows: Vec<(String, String, Option<String>, i64)> = sqlx::query_as(
+        "SELECT id, search_text, group_id, use_count FROM clipboard_items \
+         WHERE kind = 'text' AND search_text IS NOT NULL AND search_text <> '' \
+           AND is_favorite = 0 AND is_pinned = 0 \
+           AND priority_order IS NULL AND pin_order IS NULL \
+           AND note IS NULL AND is_sensitive = 0 \
+         ORDER BY search_text ASC, group_id ASC, updated_at DESC, created_at DESC, id ASC",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .context("load ordinary duplicate candidates")?;
+
+    let mut keepers: HashMap<(String, Option<String>), String> = HashMap::new();
+    let mut removed = 0u64;
+    for (id, visible_text, group_id, use_count) in rows {
+        let key = (visible_text, group_id);
+        if let Some(keep_id) = keepers.get(&key) {
+            sqlx::query("UPDATE clipboard_items SET use_count = use_count + ? WHERE id = ?")
+                .bind(use_count)
+                .bind(keep_id)
+                .execute(&mut *tx)
+                .await
+                .context("merge duplicate clipboard use count")?;
+            sqlx::query("DELETE FROM clipboard_items WHERE id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .context("remove safe ordinary text duplicate")?;
+            removed += 1;
+        } else {
+            keepers.insert(key, id);
+        }
+    }
+    tx.commit().await.context("commit text dedup transaction")?;
+    Ok(removed)
 }
 
 /// 按 `content_hash` 查最近一条同内容记录（命中 `idx_clipboard_items_content_hash` 索引）。
@@ -908,6 +987,101 @@ mod tests {
         assert_eq!(ids(&all), ["first"]);
         assert_eq!(all[0].use_count, 2);
         assert!(find_item_by_id(&pool, "second").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn same_visible_text_across_html_and_plain_is_one_card() {
+        let pool = memory_pool().await;
+        let mut html = sample_item("rich");
+        html.content = "<b>前端检查</b>".to_owned();
+        html.content_hash = content_hash(ClipboardKind::Text, &html.content);
+        html.search_text = Some("前端检查".to_owned());
+        html.summary = Some("前端检查".to_owned());
+        html.sub_kind = Some(crate::db::models::ClipboardSubKind::Html);
+        upsert_item(&pool, &html).await.unwrap();
+
+        let mut plain = sample_item("plain");
+        plain.content = "前端检查".to_owned();
+        plain.content_hash = content_hash(ClipboardKind::Text, &plain.content);
+        plain.search_text = Some("前端检查".to_owned());
+        plain.summary = Some("前端检查".to_owned());
+        let result = upsert_item(&pool, &plain).await.unwrap();
+
+        assert!(result.deduplicated);
+        assert_eq!(result.id, "rich");
+        assert_eq!(find_item_by_id(&pool, "rich").await.unwrap().unwrap().use_count, 2);
+        assert!(find_item_by_id(&pool, "plain").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn equal_short_summary_does_not_merge_different_full_text() {
+        let pool = memory_pool().await;
+        let mut one = sample_item("one");
+        let mut two = sample_item("two");
+        one.search_text = Some(format!("{}甲", "x".repeat(256)));
+        two.search_text = Some(format!("{}乙", "x".repeat(256)));
+        one.summary = Some("x".repeat(256));
+        two.summary = one.summary.clone();
+        assert!(!upsert_item(&pool, &one).await.unwrap().deduplicated);
+        assert!(!upsert_item(&pool, &two).await.unwrap().deduplicated);
+        assert_eq!(query_items(&pool, &ClipboardItemQuery::default()).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn concurrent_same_copy_events_cannot_insert_duplicate_rows() {
+        let pool = memory_pool().await;
+        let mut jobs = Vec::new();
+        for i in 0..16 {
+            let pool = pool.clone();
+            let mut item = sample_item(&format!("copy-{i}"));
+            item.content = "unique-rapid-copy".to_owned();
+            item.content_hash = content_hash(ClipboardKind::Text, &item.content);
+            item.search_text = Some("unique-rapid-copy".to_owned());
+            jobs.push(tokio::spawn(async move {
+                upsert_item(&pool, &item).await.unwrap();
+            }));
+        }
+        for job in jobs {
+            job.await.unwrap();
+        }
+        let all = query_items(&pool, &ClipboardItemQuery::default()).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].use_count, 16);
+    }
+
+    #[tokio::test]
+    async fn only_unprotected_existing_text_duplicates_are_reconciled() {
+        let pool = memory_pool().await;
+        let mut first = sample_item("first");
+        first.content = "<b>前端检查</b>".to_owned();
+        first.content_hash = content_hash(ClipboardKind::Text, &first.content);
+        first.search_text = Some("前端检查".to_owned());
+        first.use_count = 2;
+        insert_item(&pool, &first).await.unwrap();
+
+        let mut second = sample_item("second");
+        second.content = "前端检查".to_owned();
+        second.content_hash = content_hash(ClipboardKind::Text, &second.content);
+        second.search_text = Some("前端检查".to_owned());
+        second.use_count = 3;
+        insert_item(&pool, &second).await.unwrap();
+
+        let mut favorite = sample_item("fav");
+        favorite.content = "<i>前端检查</i>".to_owned();
+        favorite.content_hash = content_hash(ClipboardKind::Text, &favorite.content);
+        favorite.search_text = Some("前端检查".to_owned());
+        favorite.is_favorite = true;
+        insert_item(&pool, &favorite).await.unwrap();
+
+        assert_eq!(consolidate_safe_text_duplicates(&pool).await.unwrap(), 1);
+        assert_eq!(consolidate_safe_text_duplicates(&pool).await.unwrap(), 0);
+        assert!(find_item_by_id(&pool, "fav").await.unwrap().is_some());
+        let normal = query_items(&pool, &ClipboardItemQuery::default()).await.unwrap();
+        assert_eq!(normal.len(), 2);
+        assert_eq!(
+            normal.iter().filter(|item| !item.is_favorite).map(|item| item.use_count).sum::<i64>(),
+            5
+        );
     }
 
     #[tokio::test]
