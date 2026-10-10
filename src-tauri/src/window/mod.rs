@@ -400,6 +400,23 @@ pub fn position_window(app_handle: &AppHandle, label: &str, pos: WindowPosition)
     position::position_window(&window, pos)
 }
 
+/// Keep the main window fully on the active Windows work area while it
+/// remains visible. Scale-factor changes may also require recomputing physical
+/// dimensions from the preserved preferred logical size. Side panels continue
+/// following the main window with the existing zero-gap layout logic.
+pub fn handle_clipboard_geometry_event(app: &AppHandle, scale_changed: bool) -> Result<()> {
+    if let Some(main) = app.get_webview_window(CLIPBOARD_WINDOW_LABEL) {
+        if main.is_visible().unwrap_or(false) {
+            if scale_changed {
+                state::restore_window_state(app, CLIPBOARD_WINDOW_LABEL)?;
+            } else {
+                state::refit_visible_main_if_clipped(app)?;
+            }
+        }
+    }
+    sync_pinned_panel_layout(app)
+}
+
 /// 剪贴板窗口显示前按设置应用窗口定位策略。
 /// 始终先调用 `restore_window_state` 恢复尺寸与合法位置（含越界 fallback）；
 /// 非 Remember 策略再由 `position_window` 覆盖位置。

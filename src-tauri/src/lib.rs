@@ -285,10 +285,18 @@ pub fn run() {
             }
 
             if window.label() == window::CLIPBOARD_WINDOW_LABEL
-                && matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_))
+                && matches!(
+                    event,
+                    WindowEvent::Moved(_)
+                        | WindowEvent::Resized(_)
+                        | WindowEvent::ScaleFactorChanged { .. }
+                )
             {
-                if let Err(err) = window::sync_pinned_panel_layout(window.app_handle()) {
-                    log::debug!("sync pinned panel after clipboard geometry change failed: {err}");
+                let dpi_changed = matches!(event, WindowEvent::ScaleFactorChanged { .. });
+                if let Err(err) =
+                    window::handle_clipboard_geometry_event(window.app_handle(), dpi_changed)
+                {
+                    log::debug!("adjust clipboard windows to active display failed: {err}");
                 }
             }
         })

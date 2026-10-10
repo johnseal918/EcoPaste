@@ -5,7 +5,9 @@ use std::sync::{Mutex, RwLock};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize};
+use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
+
+use crate::settings::{SettingsStore, WindowPosition};
 
 use crate::core::Result;
 
@@ -23,9 +25,11 @@ const COMPACT_CLIPBOARD_HEIGHT_LOGICAL: f64 = 500.0;
 // Version 1 only normalized legacy height. It preserved oversized saved widths
 // and stopped compacting a window if a hide/exit had already stored version=1.
 // Version 2 migrates both axes to the configured compact defaults exactly once.
-const WINDOW_SIZE_VERSION: u8 = 2;
+const WINDOW_SIZE_VERSION: u8 = 3;
+// Preserve v2 user resizes: version 3 adds display-aware preferences only.
+const LEGACY_GEOMETRY_VERSION: u8 = 2;
 /// Reserve a little space for the taskbar when checking a saved screen rect.
-const BOTTOM_SAFE_MARGIN_LOGICAL: f64 = 48.0;
+const BOTTOM_SAFE_MARGIN_LOGICAL: f64 = 8.0;
 
 fn restored_width_with_main_floor(label: &str, saved_physical: u32, scale: f64) -> u32 {
     if label != super::CLIPBOARD_WINDOW_LABEL || !scale.is_finite() || scale <= 0.0 {
@@ -47,7 +51,7 @@ fn restored_width_by_state_version(
     sizing_version: u8,
 ) -> u32 {
     if label != super::CLIPBOARD_WINDOW_LABEL
-        || sizing_version >= WINDOW_SIZE_VERSION
+        || sizing_version >= LEGACY_GEOMETRY_VERSION
         || !scale.is_finite()
         || scale <= 0.0
     {
@@ -76,7 +80,7 @@ fn restored_height_by_state_version(
     sizing_version: u8,
 ) -> u32 {
     if label != super::CLIPBOARD_WINDOW_LABEL
-        || sizing_version >= WINDOW_SIZE_VERSION
+        || sizing_version >= LEGACY_GEOMETRY_VERSION
         || !scale.is_finite()
         || scale <= 0.0
     {
@@ -123,15 +127,117 @@ fn fit_saved_rect(
     )
 }
 
+/// Per-monitor usable Windows desktop rect (taskbar already excluded).
+#[derive(Clone, Copy, Debug)]
+struct DisplayWorkArea {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale: f64,
+}
+
+impl DisplayWorkArea {
+    fn from_monitor(monitor: &tauri::Monitor) -> Self {
+        let work = monitor.work_area();
+        let (x, y, width, height) = if work.size.width > 0 && work.size.height > 0 {
+            (work.position.x, work.position.y, work.size.width, work.size.height)
+        } else {
+            (
+                monitor.position().x,
+                monitor.position().y,
+                monitor.size().width,
+                monitor.size().height,
+            )
+        };
+        Self { x, y, width, height, scale: monitor.scale_factor() }
+    }
+}
+
+fn position_on_monitor(m: &tauri::Monitor, x: f64, y: f64) -> bool {
+    let left = f64::from(m.position().x);
+    let top = f64::from(m.position().y);
+    x >= left && x < left + f64::from(m.size().width)
+        && y >= top && y < top + f64::from(m.size().height)
+}
+
+/// If an old position is offscreen after UU changes desktop resolution,
+/// select the monitor containing the cursor instead of skipping clipping.
+fn choose_work_area(
+    window: &WebviewWindow,
+    saved_position: Option<(i32, i32)>,
+    prefer_cursor: bool,
+) -> Result<Option<DisplayWorkArea>> {
+    let monitors = window.available_monitors().map_err(|e| anyhow::anyhow!(e))?;
+    let saved = saved_position.and_then(|(x, y)| {
+        monitors.iter().find(|m| position_on_monitor(m, f64::from(x), f64::from(y)))
+    });
+    let cursor = window.cursor_position().ok().and_then(|p| {
+        monitors.iter().find(|m| position_on_monitor(m, p.x, p.y))
+    });
+    let selected = if prefer_cursor { cursor.or(saved) } else { saved.or(cursor) };
+    if let Some(monitor) = selected {
+        return Ok(Some(DisplayWorkArea::from_monitor(monitor)));
+    }
+    Ok(window
+        .current_monitor()
+        .map_err(|e| anyhow::anyhow!(e))?
+        .or(window.primary_monitor().map_err(|e| anyhow::anyhow!(e))?)
+        .as_ref()
+        .map(DisplayWorkArea::from_monitor))
+}
+
+fn valid_preference(v: Option<f64>) -> Option<f64> {
+    v.filter(|x| x.is_finite() && *x > 0.0 && *x < 20_000.0)
+}
+
+/// Physical fit to current usable work area, including HiDPI remote sessions
+/// where the configured logical minHeight cannot physically fit the desktop.
+fn effective_main_size(
+    preferred_width: f64,
+    preferred_height: f64,
+    area: DisplayWorkArea,
+    inset_width: u32,
+    inset_height: u32,
+) -> (PhysicalSize<u32>, PhysicalSize<u32>) {
+    let scale = if area.scale.is_finite() && area.scale > 0.0 { area.scale } else { 1.0 };
+    let safe = (BOTTOM_SAFE_MARGIN_LOGICAL * scale).ceil() as u32;
+    let available_width = area.width.saturating_sub(inset_width).saturating_sub(safe).max(1);
+    let available_height = area.height.saturating_sub(inset_height).saturating_sub(safe).max(1);
+    let min_width = ((MIN_CLIPBOARD_WIDTH_LOGICAL * scale).ceil() as u32)
+        .min(available_width).max(1);
+    let min_height = ((MIN_CLIPBOARD_HEIGHT_LOGICAL * scale).ceil() as u32)
+        .min(available_height).max(1);
+    let wanted_width = (preferred_width * scale).round() as u32;
+    let wanted_height = (preferred_height * scale).round() as u32;
+    (
+        PhysicalSize::new(
+            wanted_width.clamp(min_width, available_width),
+            wanted_height.clamp(min_height, available_height),
+        ),
+        PhysicalSize::new(min_width, min_height),
+    )
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowState {
     pub x: i32,
     pub y: i32,
     pub width: u32,
     pub height: u32,
-    /// 0/1 = old saved geometry, 2 = migrated compact default or manual resize.
+    /// 0/1 = old, 2 = compact main window, 3 = display-aware saved geometry.
     #[serde(default)]
     pub sizing_version: u8,
+    #[serde(default)]
+    pub preferred_width_logical: Option<f64>,
+    #[serde(default)]
+    pub preferred_height_logical: Option<f64>,
+    #[serde(default)]
+    pub saved_scale_factor: Option<f64>,
+    #[serde(default)]
+    pub auto_fitted_width: Option<u32>,
+    #[serde(default)]
+    pub auto_fitted_height: Option<u32>,
 }
 
 pub struct WindowStateStore {
@@ -237,11 +343,36 @@ pub fn save_window_state(app: &AppHandle, label: &str) -> Result<()> {
     let window = app
         .get_webview_window(label)
         .ok_or_else(|| anyhow::anyhow!("window not found: {label}"))?;
-
     let pos = window.outer_position().map_err(|e| anyhow::anyhow!(e))?;
     let size = window.inner_size().map_err(|e| anyhow::anyhow!(e))?;
+    let scale = window.scale_factor().map_err(|e| anyhow::anyhow!(e))?;
+    let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
 
     let store = app.state::<WindowStateStore>();
+    let old = store.get(label);
+    let (preferred_width_logical, preferred_height_logical) =
+        if label == super::CLIPBOARD_WINDOW_LABEL {
+            // An automatic fit on a small remote desktop must not overwrite the
+            // user's logical preference from a large local monitor.
+            let is_auto_fit = old.as_ref().is_some_and(|previous| {
+                previous.auto_fitted_width == Some(size.width)
+                    && previous.auto_fitted_height == Some(size.height)
+            });
+            if is_auto_fit {
+                (
+                    old.as_ref().and_then(|previous| valid_preference(previous.preferred_width_logical)),
+                    old.as_ref().and_then(|previous| valid_preference(previous.preferred_height_logical)),
+                )
+            } else {
+                (
+                    Some(f64::from(size.width) / scale),
+                    Some(f64::from(size.height) / scale),
+                )
+            }
+        } else {
+            (None, None)
+        };
+
     store.save(
         label,
         WindowState {
@@ -250,109 +381,150 @@ pub fn save_window_state(app: &AppHandle, label: &str) -> Result<()> {
             width: size.width,
             height: size.height,
             sizing_version: WINDOW_SIZE_VERSION,
+            preferred_width_logical,
+            preferred_height_logical,
+            saved_scale_factor: Some(scale),
+            auto_fitted_width: Some(size.width),
+            auto_fitted_height: Some(size.height),
         },
     )
 }
 
-/// 恢复窗口的尺寸 + 位置。无存档返回 `Ok(false)`。
-///
-/// 始终恢复存档尺寸；位置在恢复前校验是否仍位于可用显示器范围内：
-/// 若上次所在显示器已被拔出，则 fallback 到当前光标所在屏幕的中心，
-/// 避免窗口出现在不可见的虚拟坐标区域。
+/// On EVERY show use the current monitor's work area, even if the saved
+/// position is now off-screen because a remote desktop changed resolution.
+/// The logical preferred size persists; only effective physical dimensions
+/// are clamped to fit the live monitor.
 pub fn restore_window_state(app: &AppHandle, label: &str) -> Result<bool> {
     let store = app.state::<WindowStateStore>();
-    let Some(state) = store.get(label) else {
-        return Ok(false);
-    };
-
+    let old = store.get(label);
     let window = app
         .get_webview_window(label)
         .ok_or_else(|| anyhow::anyhow!("window not found: {label}"))?;
 
-    let scale = window.scale_factor().map_err(|e| anyhow::anyhow!(e))?;
-    let mut width =
-        restored_width_by_state_version(label, state.width, scale, state.sizing_version);
-    let mut height =
-        restored_height_by_state_version(label, state.height, scale, state.sizing_version);
-    let monitors = window
-        .available_monitors()
-        .map_err(|e| anyhow::anyhow!(e))?;
-    let saved_monitor = monitors.iter().find(|m| {
-        let mx = i64::from(m.position().x);
-        let my = i64::from(m.position().y);
-        let x = i64::from(state.x);
-        let y = i64::from(state.y);
-        x >= mx
-            && x < mx + i64::from(m.size().width)
-            && y >= my
-            && y < my + i64::from(m.size().height)
-    });
-    let mut actual_x = state.x;
-    let mut actual_y = state.y;
-    if let Some(monitor) = saved_monitor {
-        if label == super::CLIPBOARD_WINDOW_LABEL {
-            (actual_x, actual_y, width, height) = fit_saved_rect(
-                state.x,
-                state.y,
-                width,
-                height,
-                monitor.position().x,
-                monitor.position().y,
-                monitor.size().width,
-                monitor.size().height,
-                scale,
-            );
+    if label != super::CLIPBOARD_WINDOW_LABEL {
+        let Some(state) = old else { return Ok(false); };
+        window
+            .set_size(PhysicalSize::new(state.width, state.height))
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let monitors = window.available_monitors().map_err(|e| anyhow::anyhow!(e))?;
+        if monitors.iter().any(|m| position_on_monitor(m, f64::from(state.x), f64::from(state.y))) {
+            window
+                .set_position(PhysicalPosition::new(state.x, state.y))
+                .map_err(|e| anyhow::anyhow!(e))?;
+        } else {
+            super::position::center_on_cursor_monitor(&window)?;
         }
+        return Ok(true);
     }
-    if width != state.width || height != state.height {
+
+    let follow_cursor = app.try_state::<SettingsStore>().is_none_or(|settings| {
+        !matches!(settings.snapshot().clipboard.window.position, WindowPosition::Remember)
+    });
+    let saved_position = old.as_ref().map(|state| (state.x, state.y));
+    let Some(area) = choose_work_area(&window, saved_position, follow_cursor)? else {
+        log::warn!("clipboard auto-fit skipped: no active monitor");
+        return Ok(false);
+    };
+    let scale = if area.scale.is_finite() && area.scale > 0.0 { area.scale } else { 1.0 };
+
+    let (preferred_width, preferred_height) = match old.as_ref() {
+        Some(saved) => {
+            let saved_scale = valid_preference(saved.saved_scale_factor).unwrap_or(scale);
+            if saved.sizing_version < LEGACY_GEOMETRY_VERSION {
+                (
+                    f64::from(restored_width_by_state_version(
+                        label, saved.width, scale, saved.sizing_version,
+                    )) / scale,
+                    f64::from(restored_height_by_state_version(
+                        label, saved.height, scale, saved.sizing_version,
+                    )) / scale,
+                )
+            } else {
+                (
+                    valid_preference(saved.preferred_width_logical)
+                        .unwrap_or(f64::from(saved.width) / saved_scale),
+                    valid_preference(saved.preferred_height_logical)
+                        .unwrap_or(f64::from(saved.height) / saved_scale),
+                )
+            }
+        }
+        None => (MIN_CLIPBOARD_WIDTH_LOGICAL, COMPACT_CLIPBOARD_HEIGHT_LOGICAL),
+    };
+
+    let outer = window.outer_size().map_err(|e| anyhow::anyhow!(e))?;
+    let inner = window.inner_size().map_err(|e| anyhow::anyhow!(e))?;
+    let extra_width = outer.width.saturating_sub(inner.width);
+    let extra_height = outer.height.saturating_sub(inner.height);
+    let (wanted, adaptive_min) =
+        effective_main_size(preferred_width, preferred_height, area, extra_width, extra_height);
+    // When a 768px remote screen uses very high DPI, the static 420-DIP
+    // minimum would itself exceed the work area. Lower the runtime minimum.
+    window.set_min_size(Some(adaptive_min)).map_err(|e| anyhow::anyhow!(e))?;
+    if window.inner_size().map_err(|e| anyhow::anyhow!(e))? != wanted {
+        window.set_size(wanted).map_err(|e| anyhow::anyhow!(e))?;
+    }
+    let applied_size = window.inner_size().map_err(|e| anyhow::anyhow!(e))?;
+    let (saved_x, saved_y) = saved_position.unwrap_or((area.x, area.y));
+    let (x, y, _, _) = fit_saved_rect(
+        saved_x, saved_y,
+        applied_size.width.saturating_add(extra_width),
+        applied_size.height.saturating_add(extra_height),
+        area.x, area.y, area.width, area.height, scale,
+    );
+    let target_pos = PhysicalPosition::new(x, y);
+    if window.outer_position().map_err(|e| anyhow::anyhow!(e))? != target_pos {
+        window.set_position(target_pos).map_err(|e| anyhow::anyhow!(e))?;
+    }
+
+    store.save(
+        label,
+        WindowState {
+            x, y,
+            width: applied_size.width,
+            height: applied_size.height,
+            sizing_version: WINDOW_SIZE_VERSION,
+            preferred_width_logical: Some(preferred_width),
+            preferred_height_logical: Some(preferred_height),
+            saved_scale_factor: Some(scale),
+            auto_fitted_width: Some(applied_size.width),
+            auto_fitted_height: Some(applied_size.height),
+        },
+    )?;
+    let shrunk = (preferred_width * scale).round() as u32 != applied_size.width
+        || (preferred_height * scale).round() as u32 != applied_size.height;
+    if shrunk {
         log::info!(
-            "restore clipboard window geometry: {}x{} -> {}x{} physical px, DPI scale {}, state version {}",
-            state.width,
-            state.height,
-            width,
-            height,
-            scale,
-            state.sizing_version
+            "clipboard auto-fit to {}x{} workarea at ({},{}), dpi={scale}: preferred {:.0}x{:.0} DIP, effective {}x{} physical",
+            area.width, area.height, area.x, area.y,
+            preferred_width, preferred_height, applied_size.width, applied_size.height
         );
     }
-    window
-        .set_size(PhysicalSize::new(width, height))
-        .map_err(|e| anyhow::anyhow!(e))?;
+    Ok(old.is_some())
+}
 
-    if saved_monitor.is_some() {
-        window
-            .set_position(PhysicalPosition::new(actual_x, actual_y))
-            .map_err(|e| anyhow::anyhow!(e))?;
-    } else {
-        super::position::center_on_cursor_monitor(&window)?;
-        let actual = window.outer_position().map_err(|e| anyhow::anyhow!(e))?;
-        actual_x = actual.x;
-        actual_y = actual.y;
+/// While visible, correct genuine off-screen window rects after a monitor
+/// change. A normal resize that still fits does not reset the user's size.
+pub fn refit_visible_main_if_clipped(app: &AppHandle) -> Result<bool> {
+    let Some(window) = app.get_webview_window(super::CLIPBOARD_WINDOW_LABEL) else {
+        return Ok(false);
+    };
+    if !window.is_visible().unwrap_or(false) {
+        return Ok(false);
     }
-
-    // Persist the once-only v2 migration immediately. Subsequent manual
-    // resizes get version=2 and are never auto-shrunk on reopen.
-    if label == super::CLIPBOARD_WINDOW_LABEL
-        && (state.sizing_version < WINDOW_SIZE_VERSION
-            || width != state.width
-            || height != state.height
-            || actual_x != state.x
-            || actual_y != state.y)
-    {
-        let actual_size = window.inner_size().map_err(|e| anyhow::anyhow!(e))?;
-        store.save(
-            label,
-            WindowState {
-                x: actual_x,
-                y: actual_y,
-                width: actual_size.width,
-                height: actual_size.height,
-                sizing_version: WINDOW_SIZE_VERSION,
-            },
-        )?;
+    let pos = window.outer_position().map_err(|e| anyhow::anyhow!(e))?;
+    let size = window.outer_size().map_err(|e| anyhow::anyhow!(e))?;
+    let Some(area) = choose_work_area(&window, Some((pos.x, pos.y)), false)? else {
+        return Ok(false);
+    };
+    let right = i64::from(pos.x) + i64::from(size.width);
+    let bottom = i64::from(pos.y) + i64::from(size.height);
+    let clipped = pos.x < area.x || pos.y < area.y
+        || right > i64::from(area.x) + i64::from(area.width)
+        || bottom > i64::from(area.y) + i64::from(area.height);
+    if clipped {
+        restore_window_state(app, super::CLIPBOARD_WINDOW_LABEL)?;
     }
-
-    Ok(true)
+    Ok(clipped)
 }
 
 #[cfg(test)]
@@ -440,12 +612,51 @@ mod compact_window_restoration_tests {
         // Screenshot-like 2048x1222 at 150%; the taskbar safety area is 72 px.
         assert_eq!(
             fit_saved_rect(1050, 376, 540, 900, 0, 0, 2048, 1222, 1.5),
-            (1050, 250, 540, 900),
+            (1050, 310, 540, 900),
         );
         assert_eq!(
             fit_saved_rect(1050, 376, 540, 750, 0, 0, 2048, 1222, 1.5),
             (1050, 376, 540, 750),
         );
+    }
+
+    #[test]
+    fn remote_1366x768_is_bounded_at_all_common_dpi_scales() {
+        use super::{effective_main_size, DisplayWorkArea};
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let area = DisplayWorkArea {
+                x: 0, y: 0, width: 1366, height: 728, scale,
+            };
+            let (fitted, min) = effective_main_size(360.0, 900.0, area, 12, 16);
+            assert!(fitted.width + 12 <= area.width);
+            assert!(fitted.height + 16 <= area.height);
+            assert!(min.width <= fitted.width && min.height <= fitted.height);
+        }
+    }
+
+    #[test]
+    fn tiny_hidpi_remote_relaxes_unfit_static_minimum() {
+        use super::{effective_main_size, DisplayWorkArea};
+        let area = DisplayWorkArea { x: 0, y: 0, width: 640, height: 430, scale: 2.0 };
+        let (fit, min) = effective_main_size(360.0, 500.0, area, 10, 10);
+        assert_eq!(fit, min);
+        assert!(fit.width + 10 <= 640 && fit.height + 10 <= 430);
+    }
+
+    #[test]
+    fn fit_handles_old_position_outside_small_remote_workarea() {
+        let (x, y, w, h) =
+            fit_saved_rect(1700, 800, 540, 800, 0, 0, 1366, 728, 1.25);
+        assert!(x >= 0 && y >= 0);
+        assert!(x as u32 + w <= 1366);
+        assert!(y as u32 + h <= 728);
+    }
+
+    #[test]
+    fn version_two_resizes_are_not_mistaken_for_legacy_forced_geometry() {
+        assert_eq!(restored_width_by_state_version("clipboard", 970, 1.5, 2), 970);
+        assert_eq!(restored_height_by_state_version("clipboard", 900, 1.5, 2), 900);
+        assert_eq!(restored_height_by_state_version("clipboard", 900, 1.5, 3), 900);
     }
 
     #[test]
