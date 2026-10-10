@@ -64,6 +64,9 @@ fn restored_height_by_state_version(
 /// Restrict a saved window rect to a monitor. Checking only that its top-left
 /// corner is on-screen is insufficient: the bottom can still extend beyond
 /// the usable screen area. This is physical-pixel math, not logical CSS math.
+/// Coordinate pairs and physical dimensions are deliberately explicit so
+/// callers cannot accidentally mix them with logical Tauri dimensions.
+#[allow(clippy::too_many_arguments)]
 fn fit_saved_rect(
     x: i32,
     y: i32,
