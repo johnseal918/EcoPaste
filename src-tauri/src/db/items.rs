@@ -1009,7 +1009,14 @@ mod tests {
 
         assert!(result.deduplicated);
         assert_eq!(result.id, "rich");
-        assert_eq!(find_item_by_id(&pool, "rich").await.unwrap().unwrap().use_count, 2);
+        assert_eq!(
+            find_item_by_id(&pool, "rich")
+                .await
+                .unwrap()
+                .unwrap()
+                .use_count,
+            2
+        );
         assert!(find_item_by_id(&pool, "plain").await.unwrap().is_none());
     }
 
@@ -1024,7 +1031,13 @@ mod tests {
         two.summary = one.summary.clone();
         assert!(!upsert_item(&pool, &one).await.unwrap().deduplicated);
         assert!(!upsert_item(&pool, &two).await.unwrap().deduplicated);
-        assert_eq!(query_items(&pool, &ClipboardItemQuery::default()).await.unwrap().len(), 2);
+        assert_eq!(
+            query_items(&pool, &ClipboardItemQuery::default())
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[tokio::test]
@@ -1044,7 +1057,9 @@ mod tests {
         for job in jobs {
             job.await.unwrap();
         }
-        let all = query_items(&pool, &ClipboardItemQuery::default()).await.unwrap();
+        let all = query_items(&pool, &ClipboardItemQuery::default())
+            .await
+            .unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].use_count, 16);
     }
@@ -1076,10 +1091,16 @@ mod tests {
         assert_eq!(consolidate_safe_text_duplicates(&pool).await.unwrap(), 1);
         assert_eq!(consolidate_safe_text_duplicates(&pool).await.unwrap(), 0);
         assert!(find_item_by_id(&pool, "fav").await.unwrap().is_some());
-        let normal = query_items(&pool, &ClipboardItemQuery::default()).await.unwrap();
+        let normal = query_items(&pool, &ClipboardItemQuery::default())
+            .await
+            .unwrap();
         assert_eq!(normal.len(), 2);
         assert_eq!(
-            normal.iter().filter(|item| !item.is_favorite).map(|item| item.use_count).sum::<i64>(),
+            normal
+                .iter()
+                .filter(|item| !item.is_favorite)
+                .map(|item| item.use_count)
+                .sum::<i64>(),
             5
         );
     }

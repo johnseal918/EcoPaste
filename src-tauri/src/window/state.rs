@@ -50,8 +50,10 @@ fn restored_height_by_state_version(
     scale: f64,
     sizing_version: u8,
 ) -> u32 {
-    if label != super::CLIPBOARD_WINDOW_LABEL || sizing_version >= WINDOW_SIZE_VERSION
-        || !scale.is_finite() || scale <= 0.0
+    if label != super::CLIPBOARD_WINDOW_LABEL
+        || sizing_version >= WINDOW_SIZE_VERSION
+        || !scale.is_finite()
+        || scale <= 0.0
     {
         return restored_height_with_main_floor(label, saved_physical, scale);
     }
@@ -294,9 +296,7 @@ pub fn restore_window_state(app: &AppHandle, label: &str) -> Result<bool> {
             .map_err(|e| anyhow::anyhow!(e))?;
     } else {
         super::position::center_on_cursor_monitor(&window)?;
-        let actual = window
-            .outer_position()
-            .map_err(|e| anyhow::anyhow!(e))?;
+        let actual = window.outer_position().map_err(|e| anyhow::anyhow!(e))?;
         actual_x = actual.x;
         actual_y = actual.y;
     }
@@ -332,10 +332,22 @@ mod compact_window_restoration_tests {
 
     #[test]
     fn old_forced_height_is_compacted_once_by_dpi() {
-        assert_eq!(restored_height_by_state_version("clipboard", 600, 1.0, 0), 500);
-        assert_eq!(restored_height_by_state_version("clipboard", 900, 1.5, 0), 750);
-        assert_eq!(restored_height_by_state_version("clipboard", 900, 1.5, 1), 900);
-        assert_eq!(restored_height_by_state_version("clipboard-pinned", 900, 1.5, 0), 900);
+        assert_eq!(
+            restored_height_by_state_version("clipboard", 600, 1.0, 0),
+            500
+        );
+        assert_eq!(
+            restored_height_by_state_version("clipboard", 900, 1.5, 0),
+            750
+        );
+        assert_eq!(
+            restored_height_by_state_version("clipboard", 900, 1.5, 1),
+            900
+        );
+        assert_eq!(
+            restored_height_by_state_version("clipboard-pinned", 900, 1.5, 0),
+            900
+        );
     }
 
     #[test]
@@ -353,10 +365,8 @@ mod compact_window_restoration_tests {
 
     #[test]
     fn legacy_saved_state_deserializes_without_version_field() {
-        let old: WindowState = serde_json::from_str(
-            r#"{"x":1050,"y":376,"width":540,"height":900}"#,
-        )
-        .unwrap();
+        let old: WindowState =
+            serde_json::from_str(r#"{"x":1050,"y":376,"width":540,"height":900}"#).unwrap();
         assert_eq!(old.sizing_version, 0);
     }
 }
@@ -379,7 +389,10 @@ mod saved_clipboard_width_tests {
         assert_eq!(restored_height_with_main_floor("clipboard", 600, 1.5), 630);
         assert_eq!(restored_height_with_main_floor("clipboard", 600, 2.25), 945);
         assert_eq!(restored_height_with_main_floor("clipboard", 400, 1.0), 420);
-        assert_eq!(restored_height_with_main_floor("clipboard", 1150, 1.5), 1150);
+        assert_eq!(
+            restored_height_with_main_floor("clipboard", 1150, 1.5),
+            1150
+        );
     }
 
     #[test]
