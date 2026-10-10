@@ -1,7 +1,7 @@
 use tauri::AppHandle;
 
 use crate::core::Result;
-use crate::settings::WindowPosition;
+use crate::settings::{SidePanelKind, WindowPosition};
 use crate::window;
 
 pub use window::lifecycle::LifecycleSnapshot;
@@ -85,6 +85,20 @@ pub async fn take_pending_preference_highlight() -> Option<String> {
 }
 
 #[tauri::command]
+pub async fn get_clipboard_side_panels_state() -> window::ClipboardSidePanelsState {
+    window::clipboard_side_panels_state()
+}
+
+#[tauri::command]
+pub async fn set_clipboard_side_panel_open(
+    app: AppHandle,
+    panel: SidePanelKind,
+    open: bool,
+) -> Result<window::ClipboardSidePanelsState> {
+    window::set_clipboard_side_panel_open(&app, panel, open)
+}
+
+#[tauri::command]
 pub async fn show_taskbar_icon(app: AppHandle, visible: bool) -> Result<()> {
     window::show_taskbar_icon(&app, visible)
 }
@@ -110,8 +124,12 @@ pub async fn set_clipboard_window_auto_hide_suspended(suspended: bool) {
 }
 
 #[tauri::command]
-pub async fn set_clipboard_window_editing(app: AppHandle, editing: bool) -> Result<()> {
-    window::set_clipboard_window_editing(&app, editing)
+pub async fn set_clipboard_window_editing(
+    app: AppHandle,
+    label: String,
+    editing: bool,
+) -> Result<()> {
+    window::set_clipboard_window_editing(&app, &label, editing)
 }
 
 #[tauri::command]

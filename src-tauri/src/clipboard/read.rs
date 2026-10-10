@@ -7,6 +7,8 @@
 //! 仅当源是 TIFF/DIB 等非 PNG 时才回退到库的解码 + 重编码 PNG。
 
 use clipboard_rs::common::RustImage;
+#[cfg(target_os = "windows")]
+use clipboard_rs::ClipboardContent;
 use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
 
 use super::payload::{ClipboardPayload, ImagePayload, TextPayload};
@@ -51,7 +53,7 @@ impl ClipboardReader {
                 }
                 CaptureKind::Html | CaptureKind::Rtf | CaptureKind::Text => {
                     if text_payload.is_none() {
-                        text_payload = Some(self.read_text_payload()?);
+                        text_payload = Some(self.read_text_payload(capture)?);
                     }
 
                     let Some(text) = text_payload.as_ref().and_then(|payload| payload.as_ref())
@@ -90,10 +92,57 @@ impl ClipboardReader {
     }
 
     /// 读取剪贴板中的文本族表示，包含纯文本、HTML 和 RTF。
-    fn read_text_payload(&self) -> Result<Option<TextPayload>> {
+    ///
+    /// Windows 读取时必须由我们先获得真正的剪贴板锁，再批量读出文本/HTML/RTF。
+    /// clipboard-rs 0.3.5 的 Windows get() 错误地忽略 OpenClipboard 失败，
+    /// 并把格式读取失败变为 Ok([])。由此造成的“空内容”会让 watcher 静默漏记。
+    /// 外层锁确保所有文本表示来自同一版本；若被其它程序占用则向上返回 Err，
+    /// 让 watcher 在尚未确认 sequence 前重试。
+    #[cfg(target_os = "windows")]
+    fn read_text_payload(&self, capture: &Capture) -> Result<Option<TextPayload>> {
+        let mut formats = vec![ContentFormat::Text];
+        if capture.html {
+            formats.push(ContentFormat::Html);
+        }
+        if capture.rtf {
+            formats.push(ContentFormat::Rtf);
+        }
+
+        // clipboard-rs 0.3.5's get() internally ignores ClipboardWin::new_attempts
+        // failures and then converts each format read failure into an empty result.
+        // The external RAII lock is intentionally acquired first and kept alive
+        // across get(). Its nested open failure is ignored upstream, while the
+        // actual clipboard_win::get calls use our already open clipboard handle.
+        // If acquisition fails, propagate Err instead of a false Ok(None).
+        let _clipboard_lock = clipboard_win::Clipboard::new_attempts(10).map_err(|err| {
+            AppError::Clipboard(format!("Windows clipboard text snapshot busy: {err}"))
+        })?;
+        let contents = self.ctx.get(&formats).map_err(clip_err)?;
+        let mut text = String::new();
+        let mut html = None;
+        let mut rtf = None;
+
+        for content in contents {
+            match content {
+                ClipboardContent::Text(value) => text = value,
+                ClipboardContent::Html(value) => html = non_empty_string(value),
+                ClipboardContent::Rtf(value) => rtf = non_empty_string(value),
+                _ => {}
+            }
+        }
+
+        if text.is_empty() && html.is_none() && rtf.is_none() {
+            return Ok(None);
+        }
+
+        Ok(Some(TextPayload { text, html, rtf }))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn read_text_payload(&self, capture: &Capture) -> Result<Option<TextPayload>> {
         let has_text = self.ctx.has(ContentFormat::Text);
-        let has_html = self.ctx.has(ContentFormat::Html);
-        let has_rtf = self.ctx.has(ContentFormat::Rtf);
+        let has_html = capture.html && self.ctx.has(ContentFormat::Html);
+        let has_rtf = capture.rtf && self.ctx.has(ContentFormat::Rtf);
         if !has_text && !has_html && !has_rtf {
             return Ok(None);
         }
@@ -176,6 +225,12 @@ fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 
 /// 仅当 `available` 时读取，读取失败或空串都归并为 `None`，
 /// 让「格式存在但内容为空」与「格式不存在」对下游表现一致。
+#[cfg(target_os = "windows")]
+fn non_empty_string(value: String) -> Option<String> {
+    (!value.is_empty()).then_some(value)
+}
+
+#[cfg(not(target_os = "windows"))]
 fn read_optional(
     available: bool,
     read: impl FnOnce() -> clipboard_rs::common::Result<String>,

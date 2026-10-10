@@ -7,7 +7,17 @@
 //! 平台 API：macOS 走 `NSWorkspace.frontmostApplication`，Windows 走 `GetForegroundWindow`
 //! + `QueryFullProcessImageNameW`。图标统一交给 `crate::clipboard::icon` 跨平台抽取。
 
+use std::path::PathBuf;
+
 use crate::db::models::Platform;
+
+#[derive(Debug, Clone)]
+pub enum FrontmostHint {
+    #[cfg(target_os = "macos")]
+    Mac(FrontmostApp),
+    #[cfg(target_os = "windows")]
+    WindowsPid(u32),
+}
 
 #[derive(Debug, Clone)]
 pub struct FrontmostApp {
@@ -16,19 +26,20 @@ pub struct FrontmostApp {
     /// 显示名（localizedName / FileDescription / exe stem 的优先回落）。
     pub name: String,
     pub platform: Platform,
-    /// 应用图标的 PNG 字节；提取失败则 `None`。
-    pub icon_png: Option<Vec<u8>>,
+    /// 用于后台提取应用图标的路径。监听回调只抓元数据，不做图标 IO/编码。
+    pub icon_path: Option<PathBuf>,
 }
 
-/// 探测当前前台应用。失败不报错，只在 trace 级别记日志（监听回调高频，避免噪声）。
-pub fn detect_frontmost() -> Option<FrontmostApp> {
+/// 在剪贴板事件刚到达时抓一个尽可能轻量的来源提示。
+/// Windows 只取前台窗口 PID，不做 OpenProcess/路径查询；昂贵解析放到后台。
+pub fn capture_frontmost_hint() -> Option<FrontmostHint> {
     #[cfg(target_os = "macos")]
     {
-        macos::detect()
+        macos::detect().map(FrontmostHint::Mac)
     }
     #[cfg(target_os = "windows")]
     {
-        windows::detect()
+        windows::capture_pid().map(FrontmostHint::WindowsPid)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -36,11 +47,25 @@ pub fn detect_frontmost() -> Option<FrontmostApp> {
     }
 }
 
+/// 把轻量来源提示解析成稳定应用信息。这个函数允许放到后台线程执行。
+pub fn resolve_frontmost_hint(hint: FrontmostHint) -> Option<FrontmostApp> {
+    match hint {
+        #[cfg(target_os = "macos")]
+        FrontmostHint::Mac(app) => Some(app),
+        #[cfg(target_os = "windows")]
+        FrontmostHint::WindowsPid(pid) => windows::from_pid(pid),
+    }
+}
+
+/// 兼容其它调用点的一步式探测；监听热路径应优先使用
+/// capture_frontmost_hint + resolve_frontmost_hint 两阶段方式。
+pub fn detect_frontmost() -> Option<FrontmostApp> {
+    capture_frontmost_hint().and_then(resolve_frontmost_hint)
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
     use super::{FrontmostApp, Platform};
-    use crate::clipboard::icon;
-
     use std::path::PathBuf;
 
     use objc2::msg_send;
@@ -60,14 +85,13 @@ mod macos {
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| id.clone());
 
-            let icon_png =
-                unsafe { bundle_path(&app) }.and_then(|path| icon::icon_png(&path, None));
+            let icon_path = unsafe { bundle_path(&app) };
 
             Some(FrontmostApp {
                 id,
                 name,
                 platform: Platform::Macos,
-                icon_png,
+                icon_path,
             })
         })
     }
@@ -85,9 +109,7 @@ mod macos {
 #[cfg(target_os = "windows")]
 mod windows {
     use super::{FrontmostApp, Platform};
-    use crate::clipboard::icon;
-
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use winapi::shared::minwindef::{DWORD, FALSE};
     use winapi::shared::windef::HWND;
@@ -97,35 +119,38 @@ mod windows {
     use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
     use winapi::um::winuser::{GetForegroundWindow, GetWindowThreadProcessId};
 
-    pub(super) fn detect() -> Option<FrontmostApp> {
-        let exe_path = unsafe { foreground_exe_path() }?;
-        // 自身写回事件依赖 WritebackGuard 的 content_hash 判定，这里不过滤自身——
-        // 与 macOS 行为一致：哪怕拿到的是 EcoPaste 自己，guard 也会在下游 short-circuit。
+    pub(super) fn capture_pid() -> Option<DWORD> {
+        let hwnd: HWND = unsafe { GetForegroundWindow() };
+        if hwnd.is_null() {
+            return None;
+        }
+
+        let mut pid: DWORD = 0;
+        unsafe {
+            GetWindowThreadProcessId(hwnd, &mut pid);
+        }
+        (pid != 0).then_some(pid)
+    }
+
+    pub(super) fn from_pid(pid: DWORD) -> Option<FrontmostApp> {
+        let exe_path = unsafe { process_exe_path(pid) }?;
+        // 自身写回事件依赖 WritebackGuard 的 content_hash 判定，这里不过滤自身。
         let name = Path::new(&exe_path)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(&exe_path)
             .to_owned();
-        let icon_png = icon::icon_png(Path::new(&exe_path), None);
+        let icon_path = Some(PathBuf::from(&exe_path));
 
         Some(FrontmostApp {
             id: exe_path,
             name,
             platform: Platform::Windows,
-            icon_png,
+            icon_path,
         })
     }
 
-    unsafe fn foreground_exe_path() -> Option<String> {
-        let hwnd: HWND = GetForegroundWindow();
-        if hwnd.is_null() {
-            return None;
-        }
-        let mut pid: DWORD = 0;
-        GetWindowThreadProcessId(hwnd, &mut pid);
-        if pid == 0 {
-            return None;
-        }
+    unsafe fn process_exe_path(pid: DWORD) -> Option<String> {
         // PROCESS_QUERY_LIMITED_INFORMATION 足够 QueryFullProcessImageNameW，且不需要管理员权限。
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
         if handle.is_null() {

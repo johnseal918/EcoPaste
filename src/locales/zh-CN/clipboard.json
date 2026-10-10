@@ -63,6 +63,19 @@
     "placeholder": "为这条记录添加备注...",
     "title": "编辑备注"
   },
+  "ordering": {
+    "positionLabel": "位置",
+    "positionPlaceholder": "输入序号",
+    "positionTitle": "移动到指定位置"
+  },
+  "pinnedPanel": {
+    "empty": "暂无置顶内容",
+    "moveFirst": "移到最前",
+    "moveLast": "移到最后",
+    "moveTo": "移动到指定位置…",
+    "title": "置顶",
+    "unpin": "取消置顶"
+  },
   "quickActions": {
     "copy": "复制",
     "copyPlain": "复制为纯文本",
@@ -101,6 +114,26 @@
     "switchCategory": "切换分类",
     "switchCustomGroup": "切换自定义分组",
     "toggleRange": "切换全部 / 收藏"
+  },
+  "sidePanels": {
+    "alwaysShow": "始终显示",
+    "close": "关闭面板",
+    "empty": {
+      "favorite": "暂无收藏内容",
+      "files": "暂无文件内容",
+      "image": "暂无图片内容",
+      "pinned": "暂无置顶内容",
+      "text": "暂无文本内容"
+    },
+    "favorite": "收藏",
+    "files": "文件",
+    "image": "图片",
+    "moveLeft": "向左移动",
+    "moveRight": "向右移动",
+    "moveToLeft": "移到主面板左侧",
+    "moveToRight": "移到主面板右侧",
+    "pinned": "置顶",
+    "text": "文本"
   },
   "types": {
     "color": "颜色",

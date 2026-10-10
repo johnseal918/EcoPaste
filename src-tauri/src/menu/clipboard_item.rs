@@ -37,6 +37,14 @@ pub enum ClipboardMenuAction {
     RevealInExplorer,
     ToggleFavorite,
     TogglePinned,
+    AddPriority,
+    PriorityFirst,
+    PriorityLast,
+    PriorityMoveTo,
+    PriorityCancel,
+    PinFirst,
+    PinLast,
+    PinMoveTo,
     MoveToGroup,
     EditNote,
     Delete,
@@ -77,6 +85,11 @@ impl ClipboardMenuAction {
                     Key::PinItem
                 }
             }
+            Self::AddPriority => Key::AddPriority,
+            Self::PriorityFirst | Self::PinFirst => Key::MoveFirst,
+            Self::PriorityLast | Self::PinLast => Key::MoveLast,
+            Self::PriorityMoveTo | Self::PinMoveTo => Key::MoveToPosition,
+            Self::PriorityCancel => Key::CancelPriority,
             Self::MoveToGroup => Key::MoveToGroup,
             Self::EditNote => {
                 if has_note {
@@ -103,7 +116,15 @@ impl ClipboardMenuAction {
             }
             Self::ToggleFavorite => Some("CmdOrCtrl+D"),
             Self::TogglePinned => Some("CmdOrCtrl+T"),
-            Self::MoveToGroup => None,
+            Self::AddPriority
+            | Self::PriorityFirst
+            | Self::PriorityLast
+            | Self::PriorityMoveTo
+            | Self::PriorityCancel
+            | Self::PinFirst
+            | Self::PinLast
+            | Self::PinMoveTo
+            | Self::MoveToGroup => None,
             Self::EditNote => Some("CmdOrCtrl+M"),
             Self::Delete => Some("CmdOrCtrl+Backspace"),
         }
@@ -128,6 +149,14 @@ pub(super) const ACTION_GROUPS: &[&[ClipboardMenuAction]] = &[
     &[
         ClipboardMenuAction::ToggleFavorite,
         ClipboardMenuAction::TogglePinned,
+        ClipboardMenuAction::AddPriority,
+        ClipboardMenuAction::PriorityFirst,
+        ClipboardMenuAction::PriorityLast,
+        ClipboardMenuAction::PriorityMoveTo,
+        ClipboardMenuAction::PriorityCancel,
+        ClipboardMenuAction::PinFirst,
+        ClipboardMenuAction::PinLast,
+        ClipboardMenuAction::PinMoveTo,
         ClipboardMenuAction::MoveToGroup,
         ClipboardMenuAction::EditNote,
     ],
@@ -219,6 +248,14 @@ mod native {
                 Self::RevealInExplorer => "cim::revealInExplorer",
                 Self::ToggleFavorite => "cim::toggleFavorite",
                 Self::TogglePinned => "cim::togglePinned",
+                Self::AddPriority => "cim::addPriority",
+                Self::PriorityFirst => "cim::priorityFirst",
+                Self::PriorityLast => "cim::priorityLast",
+                Self::PriorityMoveTo => "cim::priorityMoveTo",
+                Self::PriorityCancel => "cim::priorityCancel",
+                Self::PinFirst => "cim::pinFirst",
+                Self::PinLast => "cim::pinLast",
+                Self::PinMoveTo => "cim::pinMoveTo",
                 Self::MoveToGroup => "cim::moveToGroup",
                 Self::EditNote => "cim::editNote",
                 Self::Delete => "cim::delete",
@@ -238,6 +275,14 @@ mod native {
                 ClipboardMenuAction::RevealInExplorer,
                 ClipboardMenuAction::ToggleFavorite,
                 ClipboardMenuAction::TogglePinned,
+                ClipboardMenuAction::AddPriority,
+                ClipboardMenuAction::PriorityFirst,
+                ClipboardMenuAction::PriorityLast,
+                ClipboardMenuAction::PriorityMoveTo,
+                ClipboardMenuAction::PriorityCancel,
+                ClipboardMenuAction::PinFirst,
+                ClipboardMenuAction::PinLast,
+                ClipboardMenuAction::PinMoveTo,
                 ClipboardMenuAction::MoveToGroup,
                 ClipboardMenuAction::EditNote,
                 ClipboardMenuAction::Delete,

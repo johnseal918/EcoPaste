@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use anyhow::Context;
 use blake3::Hasher;
 use chrono::Utc;
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
+use tokio::sync::Mutex;
 
 use crate::core::Result;
 use crate::db::models::{
@@ -10,7 +13,7 @@ use crate::db::models::{
 
 const SELECT_ITEM: &str = "SELECT id, kind, sub_kind, group_id, source_app_id, content, \
      content_hash, search_text, summary, file_types, size, width, height, use_count, is_favorite, is_pinned, \
-     is_sensitive, platform, note, created_at, updated_at FROM clipboard_items";
+     priority_order, pin_order, is_sensitive, platform, note, created_at, updated_at FROM clipboard_items";
 
 /// 列表/单条刷新场景的精简 SELECT：text 类型条目的 `content` 与 `search_text` 一律置空，
 /// 由前端用 `summary` 渲染。HTML/RTF/长纯文本可能很大（用户复制整段文档），
@@ -27,6 +30,7 @@ const LIST_SELECT_ITEM: &str = "SELECT clipboard_items.id, clipboard_items.kind,
      clipboard_items.summary, clipboard_items.file_types, clipboard_items.size, \
      clipboard_items.width, clipboard_items.height, clipboard_items.use_count, \
      clipboard_items.is_favorite, clipboard_items.is_pinned, \
+     clipboard_items.priority_order, clipboard_items.pin_order, \
      clipboard_items.is_sensitive, \
      clipboard_items.platform, clipboard_items.note, \
      clipboard_items.created_at, clipboard_items.updated_at, \
@@ -63,10 +67,17 @@ fn kind_tag(kind: ClipboardKind) -> &'static str {
     }
 }
 
-/// 入库主入口：按 `item.content_hash` 去重。
-/// 命中已有记录 → 复用 [`increment_item_use_count`] 累加并刷新 `updated_at`，不插入新行；
-/// 未命中 → 调用 [`insert_item`] 插入。返回生效行 id 与是否去重。
+/// Serialize check + insert: the capture watcher can enqueue multiple async
+/// persistence tasks from consecutive copies. Without this gate, two tasks
+/// can both SELECT "absent" and INSERT duplicate cards with different IDs.
+/// All writes in one EcoPaste process use this shared gate.
+static UPSERT_GATE: Mutex<()> = Mutex::const_new(());
+
+/// 入库主入口：图片/文件按原始内容指纹去重；文本额外比较真正展示的完整纯文本。
+/// 同样的可见文本可能分别来自 HTML/RTF/plain，原始格式字节不同，
+/// 但历史卡片不应因此出现多条。禁止用截断的 summary 进行去重。
 pub async fn upsert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<UpsertResult> {
+    let _serial = UPSERT_GATE.lock().await;
     if let Some(existing) = find_item_by_content_hash(pool, &item.content_hash).await? {
         increment_item_use_count(pool, &existing.id).await?;
         return Ok(UpsertResult {
@@ -75,11 +86,80 @@ pub async fn upsert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<Upse
         });
     }
 
+    if item.kind == ClipboardKind::Text {
+        if let Some(plain) = item.search_text.as_deref().filter(|s| !s.is_empty()) {
+            // FULL search_text, never short summary: false matches would destroy
+            // distinct copied paragraphs with identical first 256 characters.
+            let existing_id = sqlx::query_scalar::<_, String>(
+                "SELECT id FROM clipboard_items \
+                 WHERE kind = 'text' AND search_text = ? \
+                 ORDER BY is_pinned DESC, is_favorite DESC, updated_at DESC, id ASC LIMIT 1",
+            )
+            .bind(plain)
+            .fetch_optional(pool)
+            .await
+            .context("failed to find same visible text")?;
+            if let Some(existing_id) = existing_id {
+                increment_item_use_count(pool, &existing_id).await?;
+                return Ok(UpsertResult {
+                    id: existing_id,
+                    deduplicated: true,
+                });
+            }
+        }
+    }
+
     insert_item(pool, item).await?;
     Ok(UpsertResult {
         id: item.id.clone(),
         deduplicated: false,
     })
+}
+
+/// One-time-safe reconciliation for pre-existing duplicates from the old
+/// rich-format/raw-hash policy or concurrent asynchronous writes. Only
+/// untouched ordinary history with the same full text AND same group is
+/// eligible; favorite, pinned, manually ordered, annotated and sensitive
+/// entries are never deleted automatically. Preserve total use_count and
+/// the newest representative's full-format content.
+pub async fn consolidate_safe_text_duplicates(pool: &SqlitePool) -> Result<u64> {
+    let _serial = UPSERT_GATE.lock().await;
+    let mut tx = pool.begin().await.context("begin text dedup transaction")?;
+    let rows: Vec<(String, String, Option<String>, i64)> = sqlx::query_as(
+        "SELECT id, search_text, group_id, use_count FROM clipboard_items \
+         WHERE kind = 'text' AND search_text IS NOT NULL AND search_text <> '' \
+           AND is_favorite = 0 AND is_pinned = 0 \
+           AND priority_order IS NULL AND pin_order IS NULL \
+           AND note IS NULL AND is_sensitive = 0 \
+         ORDER BY search_text ASC, group_id ASC, updated_at DESC, created_at DESC, id ASC",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .context("load ordinary duplicate candidates")?;
+
+    let mut keepers: HashMap<(String, Option<String>), String> = HashMap::new();
+    let mut removed = 0u64;
+    for (id, visible_text, group_id, use_count) in rows {
+        let key = (visible_text, group_id);
+        if let Some(keep_id) = keepers.get(&key) {
+            sqlx::query("UPDATE clipboard_items SET use_count = use_count + ? WHERE id = ?")
+                .bind(use_count)
+                .bind(keep_id)
+                .execute(&mut *tx)
+                .await
+                .context("merge duplicate clipboard use count")?;
+            sqlx::query("DELETE FROM clipboard_items WHERE id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .context("remove safe ordinary text duplicate")?;
+            removed += 1;
+        } else {
+            keepers.insert(key, id);
+        }
+    }
+    tx.commit().await.context("commit text dedup transaction")?;
+    Ok(removed)
 }
 
 /// 按 `content_hash` 查最近一条同内容记录（命中 `idx_clipboard_items_content_hash` 索引）。
@@ -105,9 +185,9 @@ pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> 
     sqlx::query(
         "INSERT INTO clipboard_items \
          (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-          summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
+          summary, file_types, size, width, height, use_count, is_favorite, is_pinned, priority_order, pin_order, is_sensitive, platform, note, \
           created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(item.id.as_str())
     .bind(item.kind)
@@ -125,6 +205,8 @@ pub async fn insert_item(pool: &SqlitePool, item: &ClipboardItem) -> Result<()> 
     .bind(item.use_count)
     .bind(item.is_favorite)
     .bind(item.is_pinned)
+    .bind(item.priority_order)
+    .bind(item.pin_order)
     .bind(item.is_sensitive)
     .bind(item.platform)
     .bind(item.note.as_deref())
@@ -212,16 +294,211 @@ pub async fn mark_item_favorite(pool: &SqlitePool, id: &str) -> Result<()> {
     Ok(())
 }
 
-/// 翻转 `is_pinned`（置顶 / 取消置顶），返回翻转后的新状态。
+/// 翻转置顶态并维护独立的置顶顺序。置顶时追加到末尾并清除普通排序；
+/// 取消置顶时清除 pin_order，随后压紧剩余置顶顺序。
 pub async fn toggle_item_pinned(pool: &SqlitePool, id: &str) -> Result<bool> {
-    let new_value: bool = sqlx::query_scalar(
-        "UPDATE clipboard_items SET is_pinned = NOT is_pinned WHERE id = ? RETURNING is_pinned",
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin pin transaction")?;
+    let current: bool = sqlx::query_scalar("SELECT is_pinned FROM clipboard_items WHERE id = ?")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await
+        .context("failed to read clipboard item pinned state")?;
+
+    if current {
+        sqlx::query("UPDATE clipboard_items SET is_pinned = 0, pin_order = NULL WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .context("failed to unpin clipboard item")?;
+        compact_order_tx(&mut tx, OrderKind::Pinned).await?;
+    } else {
+        let next: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(pin_order), 0) + 1 FROM clipboard_items WHERE is_pinned = 1",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .context("failed to calculate next pin order")?;
+        sqlx::query(
+            "UPDATE clipboard_items SET is_pinned = 1, priority_order = NULL, pin_order = ? WHERE id = ?",
+        )
+        .bind(next)
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to pin clipboard item")?;
+        compact_order_tx(&mut tx, OrderKind::Priority).await?;
+    }
+
+    tx.commit()
+        .await
+        .context("failed to commit pin transaction")?;
+    Ok(!current)
+}
+
+/// 把普通历史加入手动排序末尾。已排序时保持原位置；置顶项不可加入普通排序。
+pub async fn add_item_priority(pool: &SqlitePool, id: &str) -> Result<i64> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin priority transaction")?;
+    let row: (bool, Option<i64>) =
+        sqlx::query_as("SELECT is_pinned, priority_order FROM clipboard_items WHERE id = ?")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await
+            .context("failed to read clipboard item priority state")?;
+    if row.0 {
+        return Err(anyhow::anyhow!("pinned item cannot join normal manual order").into());
+    }
+    if let Some(order) = row.1 {
+        tx.commit()
+            .await
+            .context("failed to commit priority transaction")?;
+        return Ok(order);
+    }
+
+    let next: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(priority_order), 0) + 1 FROM clipboard_items WHERE is_pinned = 0",
     )
-    .bind(id)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
-    .context("failed to toggle clipboard item pinned")?;
-    Ok(new_value)
+    .context("failed to calculate next priority order")?;
+    sqlx::query("UPDATE clipboard_items SET priority_order = ? WHERE id = ?")
+        .bind(next)
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to add clipboard item priority")?;
+    tx.commit()
+        .await
+        .context("failed to commit priority transaction")?;
+    Ok(next)
+}
+
+/// 取消普通手动排序，并压紧剩余序号。
+pub async fn cancel_item_priority(pool: &SqlitePool, id: &str) -> Result<()> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin priority transaction")?;
+    sqlx::query("UPDATE clipboard_items SET priority_order = NULL WHERE id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to cancel clipboard item priority")?;
+    compact_order_tx(&mut tx, OrderKind::Priority).await?;
+    tx.commit()
+        .await
+        .context("failed to commit priority transaction")?;
+    Ok(())
+}
+
+/// 移动普通手动排序项。position 小于 1 归一到 1，超出范围归一到末尾。
+pub async fn move_item_priority(pool: &SqlitePool, id: &str, position: i64) -> Result<i64> {
+    move_ordered_item(pool, id, position, OrderKind::Priority).await
+}
+
+/// 移动置顶项。position 小于 1 归一到 1，超出范围归一到末尾。
+pub async fn move_pinned_item(pool: &SqlitePool, id: &str, position: i64) -> Result<i64> {
+    move_ordered_item(pool, id, position, OrderKind::Pinned).await
+}
+
+#[derive(Clone, Copy)]
+enum OrderKind {
+    Priority,
+    Pinned,
+}
+
+async fn move_ordered_item(
+    pool: &SqlitePool,
+    id: &str,
+    position: i64,
+    kind: OrderKind,
+) -> Result<i64> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin reorder transaction")?;
+    let ids = ordered_ids_tx(&mut tx, kind).await?;
+    let Some(current_index) = ids.iter().position(|current| current == id) else {
+        return Err(anyhow::anyhow!("clipboard item is not in this ordered list").into());
+    };
+
+    let mut reordered = ids;
+    let item_id = reordered.remove(current_index);
+    let target = position.max(1).min((reordered.len() + 1) as i64) as usize - 1;
+    reordered.insert(target, item_id);
+    write_order_tx(&mut tx, kind, &reordered).await?;
+    tx.commit()
+        .await
+        .context("failed to commit reorder transaction")?;
+    Ok((target + 1) as i64)
+}
+
+async fn compact_order_tx(tx: &mut sqlx::Transaction<'_, Sqlite>, kind: OrderKind) -> Result<()> {
+    let ids = ordered_ids_tx(tx, kind).await?;
+    write_order_tx(tx, kind, &ids).await
+}
+
+/// 压紧普通手动排序与置顶排序到连续的 1..N。
+/// 备份合并等批量写入完成后调用，避免来源序号冲突或跳号。
+pub async fn normalize_item_orders(pool: &SqlitePool) -> Result<()> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin order normalization")?;
+    compact_order_tx(&mut tx, OrderKind::Priority).await?;
+    compact_order_tx(&mut tx, OrderKind::Pinned).await?;
+    tx.commit()
+        .await
+        .context("failed to commit order normalization")?;
+    Ok(())
+}
+
+async fn ordered_ids_tx(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    kind: OrderKind,
+) -> Result<Vec<String>> {
+    let sql: &'static str = match kind {
+        OrderKind::Priority => {
+            "SELECT id FROM clipboard_items \
+             WHERE is_pinned = 0 AND priority_order IS NOT NULL \
+             ORDER BY priority_order ASC, created_at ASC, id ASC"
+        }
+        OrderKind::Pinned => {
+            "SELECT id FROM clipboard_items \
+             WHERE is_pinned = 1 \
+             ORDER BY pin_order IS NULL, pin_order ASC, created_at DESC, id ASC"
+        }
+    };
+    sqlx::query_scalar(sql)
+        .fetch_all(&mut **tx)
+        .await
+        .context("failed to read ordered clipboard ids")
+        .map_err(Into::into)
+}
+
+async fn write_order_tx(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    kind: OrderKind,
+    ids: &[String],
+) -> Result<()> {
+    let sql: &'static str = match kind {
+        OrderKind::Priority => "UPDATE clipboard_items SET priority_order = ? WHERE id = ?",
+        OrderKind::Pinned => "UPDATE clipboard_items SET pin_order = ? WHERE id = ?",
+    };
+    for (index, id) in ids.iter().enumerate() {
+        sqlx::query(sql)
+            .bind((index + 1) as i64)
+            .bind(id)
+            .execute(&mut **tx)
+            .await
+            .context("failed to write clipboard order")?;
+    }
+    Ok(())
 }
 
 /// 更新备注，传 `None` 清空备注。
@@ -272,6 +549,11 @@ pub async fn delete_item(pool: &SqlitePool, id: &str) -> Result<Option<String>> 
     .fetch_optional(pool)
     .await
     .context("failed to delete clipboard item")?;
+
+    if row.is_some() {
+        normalize_item_orders(pool).await?;
+    }
+
     Ok(row.and_then(|(kind, content)| image_file_name(kind, content)))
 }
 
@@ -300,6 +582,10 @@ pub async fn delete_items(pool: &SqlitePool, ids: &[String]) -> Result<u64> {
         .execute(pool)
         .await
         .context("failed to delete clipboard items")?;
+    if result.rows_affected() > 0 {
+        normalize_item_orders(pool).await?;
+    }
+
     Ok(result.rows_affected())
 }
 
@@ -351,6 +637,10 @@ pub async fn cleanup_history(
         absorb_deleted(&mut outcome, rows);
     }
 
+    if outcome.removed > 0 {
+        normalize_item_orders(pool).await?;
+    }
+
     Ok(outcome)
 }
 
@@ -390,6 +680,10 @@ pub async fn clear_items(
 
     let mut outcome = CleanupOutcome::default();
     absorb_deleted(&mut outcome, rows);
+    if outcome.removed > 0 {
+        normalize_item_orders(pool).await?;
+    }
+
     Ok(outcome)
 }
 
@@ -454,7 +748,7 @@ fn escape_like(keyword: &str) -> String {
     out
 }
 
-/// 拼装查询：过滤（含可选关键词匹配） + 排序（置顶恒前置） + 分页。
+/// 拼装查询：过滤（含可选关键词匹配） + 手动排序优先 + 配置排序 + 分页。
 /// 所有 bind 均传入拥有所有权/Copy 的值，避免 `QueryBuilder` 借用 `q` 引发的生命周期问题。
 async fn fetch_items(
     pool: &SqlitePool,
@@ -465,7 +759,26 @@ async fn fetch_items(
     qb.push(" WHERE 1 = 1");
     push_filter_clauses(&mut qb, q, &keyword);
 
-    qb.push(" ORDER BY clipboard_items.is_pinned DESC, ");
+    match q.pinned {
+        Some(true) => {
+            qb.push(" ORDER BY clipboard_items.pin_order IS NULL, clipboard_items.pin_order ASC, ");
+        }
+        Some(false) => {
+            qb.push(
+                " ORDER BY clipboard_items.priority_order IS NULL, clipboard_items.priority_order ASC, ",
+            );
+        }
+        None => {
+            // 保留通用查询的历史语义：置顶恒在前；未显式过滤时再分别套用各自手动顺序。
+            qb.push(
+                " ORDER BY clipboard_items.is_pinned DESC, \
+                 CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order IS NULL ELSE 1 END ASC, \
+                 CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order END ASC, \
+                 CASE WHEN clipboard_items.is_pinned = 0 THEN clipboard_items.priority_order IS NULL ELSE 1 END ASC, \
+                 CASE WHEN clipboard_items.is_pinned = 0 THEN clipboard_items.priority_order END ASC, ",
+            );
+        }
+    }
     match q.sort {
         ClipboardItemSort::CreatedAt => {
             qb.push("clipboard_items.created_at DESC");
@@ -587,6 +900,8 @@ mod tests {
             use_count: 1,
             is_favorite: false,
             is_pinned: false,
+            priority_order: None,
+            pin_order: None,
             is_sensitive: false,
             platform: Platform::Macos,
             note: None,
@@ -672,6 +987,122 @@ mod tests {
         assert_eq!(ids(&all), ["first"]);
         assert_eq!(all[0].use_count, 2);
         assert!(find_item_by_id(&pool, "second").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn same_visible_text_across_html_and_plain_is_one_card() {
+        let pool = memory_pool().await;
+        let mut html = sample_item("rich");
+        html.content = "<b>前端检查</b>".to_owned();
+        html.content_hash = content_hash(ClipboardKind::Text, &html.content);
+        html.search_text = Some("前端检查".to_owned());
+        html.summary = Some("前端检查".to_owned());
+        html.sub_kind = Some(crate::db::models::ClipboardSubKind::Html);
+        upsert_item(&pool, &html).await.unwrap();
+
+        let mut plain = sample_item("plain");
+        plain.content = "前端检查".to_owned();
+        plain.content_hash = content_hash(ClipboardKind::Text, &plain.content);
+        plain.search_text = Some("前端检查".to_owned());
+        plain.summary = Some("前端检查".to_owned());
+        let result = upsert_item(&pool, &plain).await.unwrap();
+
+        assert!(result.deduplicated);
+        assert_eq!(result.id, "rich");
+        assert_eq!(
+            find_item_by_id(&pool, "rich")
+                .await
+                .unwrap()
+                .unwrap()
+                .use_count,
+            2
+        );
+        assert!(find_item_by_id(&pool, "plain").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn equal_short_summary_does_not_merge_different_full_text() {
+        let pool = memory_pool().await;
+        let mut one = sample_item("one");
+        let mut two = sample_item("two");
+        one.search_text = Some(format!("{}甲", "x".repeat(256)));
+        two.search_text = Some(format!("{}乙", "x".repeat(256)));
+        one.summary = Some("x".repeat(256));
+        two.summary = one.summary.clone();
+        assert!(!upsert_item(&pool, &one).await.unwrap().deduplicated);
+        assert!(!upsert_item(&pool, &two).await.unwrap().deduplicated);
+        assert_eq!(
+            query_items(&pool, &ClipboardItemQuery::default())
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_same_copy_events_cannot_insert_duplicate_rows() {
+        let pool = memory_pool().await;
+        let mut jobs = Vec::new();
+        for i in 0..16 {
+            let pool = pool.clone();
+            let mut item = sample_item(&format!("copy-{i}"));
+            item.content = "unique-rapid-copy".to_owned();
+            item.content_hash = content_hash(ClipboardKind::Text, &item.content);
+            item.search_text = Some("unique-rapid-copy".to_owned());
+            jobs.push(tokio::spawn(async move {
+                upsert_item(&pool, &item).await.unwrap();
+            }));
+        }
+        for job in jobs {
+            job.await.unwrap();
+        }
+        let all = query_items(&pool, &ClipboardItemQuery::default())
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].use_count, 16);
+    }
+
+    #[tokio::test]
+    async fn only_unprotected_existing_text_duplicates_are_reconciled() {
+        let pool = memory_pool().await;
+        let mut first = sample_item("first");
+        first.content = "<b>前端检查</b>".to_owned();
+        first.content_hash = content_hash(ClipboardKind::Text, &first.content);
+        first.search_text = Some("前端检查".to_owned());
+        first.use_count = 2;
+        insert_item(&pool, &first).await.unwrap();
+
+        let mut second = sample_item("second");
+        second.content = "前端检查".to_owned();
+        second.content_hash = content_hash(ClipboardKind::Text, &second.content);
+        second.search_text = Some("前端检查".to_owned());
+        second.use_count = 3;
+        insert_item(&pool, &second).await.unwrap();
+
+        let mut favorite = sample_item("fav");
+        favorite.content = "<i>前端检查</i>".to_owned();
+        favorite.content_hash = content_hash(ClipboardKind::Text, &favorite.content);
+        favorite.search_text = Some("前端检查".to_owned());
+        favorite.is_favorite = true;
+        insert_item(&pool, &favorite).await.unwrap();
+
+        assert_eq!(consolidate_safe_text_duplicates(&pool).await.unwrap(), 1);
+        assert_eq!(consolidate_safe_text_duplicates(&pool).await.unwrap(), 0);
+        assert!(find_item_by_id(&pool, "fav").await.unwrap().is_some());
+        let normal = query_items(&pool, &ClipboardItemQuery::default())
+            .await
+            .unwrap();
+        assert_eq!(normal.len(), 2);
+        assert_eq!(
+            normal
+                .iter()
+                .filter(|item| !item.is_favorite)
+                .map(|item| item.use_count)
+                .sum::<i64>(),
+            5
+        );
     }
 
     #[tokio::test]
@@ -999,6 +1430,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_priority_moves_and_compacts_without_affecting_plain_history() {
+        let pool = memory_pool().await;
+        for (index, id) in ["a", "b", "c", "d"].iter().enumerate() {
+            let mut item = sample_item(id);
+            item.created_at = DateTime::from_timestamp(1_700_000_000 + index as i64, 0).unwrap();
+            item.updated_at = item.created_at;
+            insert_item(&pool, &item).await.unwrap();
+        }
+
+        assert_eq!(add_item_priority(&pool, "b").await.unwrap(), 1);
+        assert_eq!(add_item_priority(&pool, "d").await.unwrap(), 2);
+        assert_eq!(move_item_priority(&pool, "d", 1).await.unwrap(), 1);
+
+        let query = ClipboardItemQuery {
+            pinned: Some(false),
+            ..Default::default()
+        };
+        let ordered = query_items(&pool, &query).await.unwrap();
+        assert_eq!(ids(&ordered), ["d", "b", "c", "a"]);
+        assert_eq!(ordered[0].priority_order, Some(1));
+        assert_eq!(ordered[1].priority_order, Some(2));
+
+        cancel_item_priority(&pool, "d").await.unwrap();
+        let reordered = query_items(&pool, &query).await.unwrap();
+        assert_eq!(reordered[0].id, "b");
+        assert_eq!(reordered[0].priority_order, Some(1));
+        assert_eq!(
+            find_item_by_id(&pool, "d")
+                .await
+                .unwrap()
+                .unwrap()
+                .priority_order,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn pinning_ordered_item_removes_priority_and_pinned_order_reorders() {
+        let pool = memory_pool().await;
+        for id in ["a", "b", "c"] {
+            insert_item(&pool, &sample_item(id)).await.unwrap();
+        }
+
+        add_item_priority(&pool, "b").await.unwrap();
+        assert!(toggle_item_pinned(&pool, "b").await.unwrap());
+        assert!(toggle_item_pinned(&pool, "c").await.unwrap());
+
+        let b = find_item_by_id(&pool, "b").await.unwrap().unwrap();
+        assert_eq!(b.priority_order, None);
+        assert_eq!(b.pin_order, Some(1));
+
+        assert_eq!(move_pinned_item(&pool, "c", 1).await.unwrap(), 1);
+        let pinned_query = ClipboardItemQuery {
+            pinned: Some(true),
+            ..Default::default()
+        };
+        let pinned = query_items(&pool, &pinned_query).await.unwrap();
+        assert_eq!(ids(&pinned), ["c", "b"]);
+        assert_eq!(pinned[0].pin_order, Some(1));
+        assert_eq!(pinned[1].pin_order, Some(2));
+
+        assert!(!toggle_item_pinned(&pool, "c").await.unwrap());
+        let remaining = query_items(&pool, &pinned_query).await.unwrap();
+        assert_eq!(ids(&remaining), ["b"]);
+        assert_eq!(remaining[0].pin_order, Some(1));
+    }
+
+    #[tokio::test]
     async fn update_note_sets_and_clears() {
         let pool = memory_pool().await;
         insert_item(&pool, &sample_item("a")).await.unwrap();
@@ -1046,6 +1545,47 @@ mod tests {
 
         // 记录不存在：同样返回 None，不报错。
         assert_eq!(delete_item(&pool, "missing").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn deleting_ordered_items_compacts_remaining_sequences() {
+        let pool = memory_pool().await;
+        for id in ["a", "b", "c", "d"] {
+            insert_item(&pool, &sample_item(id)).await.unwrap();
+        }
+
+        add_item_priority(&pool, "a").await.unwrap();
+        add_item_priority(&pool, "b").await.unwrap();
+        add_item_priority(&pool, "c").await.unwrap();
+        toggle_item_pinned(&pool, "c").await.unwrap();
+        toggle_item_pinned(&pool, "d").await.unwrap();
+
+        delete_item(&pool, "a").await.unwrap();
+        delete_item(&pool, "c").await.unwrap();
+
+        let normal = query_items(
+            &pool,
+            &ClipboardItemQuery {
+                pinned: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let b = normal.iter().find(|item| item.id == "b").unwrap();
+        assert_eq!(b.priority_order, Some(1));
+
+        let pinned = query_items(
+            &pool,
+            &ClipboardItemQuery {
+                pinned: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(ids(&pinned), ["d"]);
+        assert_eq!(pinned[0].pin_order, Some(1));
     }
 
     #[tokio::test]

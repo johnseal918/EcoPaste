@@ -67,6 +67,8 @@ export type PreviewHoverDelayMs = "ms300" | "ms500" | "ms1000";
 
 export type UpdateFrequency = "daily" | "weekly" | "monthly";
 
+export type SidePanelKind = "pinned" | "favorite" | "text" | "image" | "files";
+
 export type OnboardingLegacyImportType = "normal" | "favorite";
 
 export interface General {
@@ -156,6 +158,13 @@ export interface Window {
   idleDestroySeconds: number;
 }
 
+export interface SidePanels {
+  order: SidePanelKind[];
+  alwaysShow: SidePanelKind[];
+  /** 未列在 left 的面板默认停靠主窗口右侧。 */
+  left: SidePanelKind[];
+}
+
 export interface Preview {
   hoverEnabled: boolean;
   hoverDelayMs: PreviewHoverDelayMs;
@@ -194,6 +203,7 @@ export interface Clipboard {
   preview: Preview;
   feedback: Feedback;
   filters: Filters;
+  sidePanels: SidePanels;
 }
 
 export interface Update {

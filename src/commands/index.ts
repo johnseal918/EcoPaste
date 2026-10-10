@@ -11,7 +11,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { TAURI_COMMAND } from "@/constants/commands";
 import i18n from "@/i18n";
-import { settingsState } from "@/stores/settings";
+import { settingsState } from "@/stores/settingsState";
 import type {
   ClipboardAction,
   ClipboardApp,
@@ -23,7 +23,7 @@ import type {
   ClipboardSubKind,
   UpdateNoteResult,
 } from "@/types/clipboard";
-import type { Settings, SettingsPatch } from "@/types/settings";
+import type { Settings, SettingsPatch, SidePanelKind } from "@/types/settings";
 import { getMessageApi, getModalApi } from "@/utils/feedback";
 import { log } from "@/utils/log";
 import { confirmClearClipboardItems } from "./confirmClearClipboardItems";
@@ -254,6 +254,10 @@ export interface AppUpdateStatus {
   update: UpdateMetadata | null;
 }
 
+export interface ClipboardSidePanelsRuntimeState {
+  open: SidePanelKind[];
+}
+
 export interface AdminLaunchStatus {
   configured: boolean;
   runningAsAdmin: boolean;
@@ -334,6 +338,24 @@ const call = async <T>(
 /**
  * 拉取设置首屏快照；后续刷新走 `settings://updated` 事件。
  */
+export const getClipboardSidePanelsState = () => {
+  return call<ClipboardSidePanelsRuntimeState>(
+    TAURI_COMMAND.GET_CLIPBOARD_SIDE_PANELS_STATE,
+    "commands:labels.openWindow",
+  );
+};
+
+export const setClipboardSidePanelOpen = (
+  panel: SidePanelKind,
+  open: boolean,
+) => {
+  return call<ClipboardSidePanelsRuntimeState>(
+    TAURI_COMMAND.SET_CLIPBOARD_SIDE_PANEL_OPEN,
+    "commands:labels.openWindow",
+    { open, panel },
+  );
+};
+
 export const getSettings = () => {
   return call<Settings>(
     TAURI_COMMAND.GET_SETTINGS,
@@ -1070,6 +1092,42 @@ export const toggleClipboardItemPinned = async (
   return next;
 };
 
+/** 把普通历史加入手动排序末尾。 */
+export const addClipboardItemPriority = (id: string) => {
+  return call<number>(
+    TAURI_COMMAND.ADD_CLIPBOARD_ITEM_PRIORITY,
+    "commands:labels.updateClipboardOrder",
+    { id },
+  );
+};
+
+/** 移动普通手动排序项到指定位置。 */
+export const moveClipboardItemPriority = (id: string, position: number) => {
+  return call<number>(
+    TAURI_COMMAND.MOVE_CLIPBOARD_ITEM_PRIORITY,
+    "commands:labels.updateClipboardOrder",
+    { id, position },
+  );
+};
+
+/** 取消普通历史手动排序。 */
+export const cancelClipboardItemPriority = (id: string) => {
+  return call<void>(
+    TAURI_COMMAND.CANCEL_CLIPBOARD_ITEM_PRIORITY,
+    "commands:labels.updateClipboardOrder",
+    { id },
+  );
+};
+
+/** 移动置顶项到指定位置。 */
+export const movePinnedClipboardItem = (id: string, position: number) => {
+  return call<number>(
+    TAURI_COMMAND.MOVE_PINNED_CLIPBOARD_ITEM,
+    "commands:labels.updateClipboardOrder",
+    { id, position },
+  );
+};
+
 /**
  * 删除条目；命令**不**广播 `clipboard://updated`，调用方需根据返回值本地移除该项。
  * 普通条目、收藏条目与置顶条目分别读取对应保护 / 确认开关。
@@ -1314,10 +1372,14 @@ export const setClipboardWindowAutoHideSuspended = (suspended: boolean) => {
 /**
  * Windows 剪贴板窗口输入编辑模式：输入控件激活期间临时可聚焦，编辑结束后恢复不可聚焦。
  */
-export const setClipboardWindowEditing = async (editing: boolean) => {
+export const setClipboardWindowEditing = async (
+  label: string,
+  editing: boolean,
+) => {
   try {
     await invoke<void>(TAURI_COMMAND.SET_CLIPBOARD_WINDOW_EDITING, {
       editing,
+      label,
     });
   } catch (error) {
     log.error("set clipboard window editing failed", toAppError(error));

@@ -6,6 +6,8 @@
 export const TAURI_COMMAND = {
   ACQUIRE_WINDOW_KEEPALIVE: "acquire_window_keepalive",
   ADD_CLIPBOARD_APP_FROM_PATH: "add_clipboard_app_from_path",
+  ADD_CLIPBOARD_ITEM_PRIORITY: "add_clipboard_item_priority",
+  CANCEL_CLIPBOARD_ITEM_PRIORITY: "cancel_clipboard_item_priority",
   CHANGE_STORAGE_LOCATION: "change_storage_location",
   CHECK_FOR_UPDATES: "check_for_updates",
   CLEAN_RESOURCE_CACHE: "clean_resource_cache",
@@ -24,6 +26,7 @@ export const TAURI_COMMAND = {
   GET_CLIPBOARD_ITEM: "get_clipboard_item",
   GET_CLIPBOARD_PREVIEW_PAYLOAD: "get_clipboard_preview_payload",
   GET_CLIPBOARD_PREVIEW_STATE: "get_clipboard_preview_state",
+  GET_CLIPBOARD_SIDE_PANELS_STATE: "get_clipboard_side_panels_state",
   GET_CONTEXT_MENU_PAYLOAD: "get_context_menu_payload",
   GET_CONTEXT_SUBMENU_PAYLOAD: "get_context_submenu_payload",
   GET_RUN_AS_ADMIN_STATUS: "get_run_as_admin_status",
@@ -43,6 +46,8 @@ export const TAURI_COMMAND = {
   LIST_ALL_APPS: "list_all_apps",
   LIST_CLIPBOARD_GROUPS: "list_clipboard_groups",
   LIST_CLIPBOARD_ITEMS: "list_clipboard_items",
+  MOVE_CLIPBOARD_ITEM_PRIORITY: "move_clipboard_item_priority",
+  MOVE_PINNED_CLIPBOARD_ITEM: "move_pinned_clipboard_item",
   NOTIFY_WINDOW_READY: "notify_window_ready",
   OPEN_CLIPBOARD_ITEM_LINK: "open_clipboard_item_link",
   OPEN_EXTERNAL_URL: "open_external_url",
@@ -61,6 +66,7 @@ export const TAURI_COMMAND = {
   REVEAL_CLIPBOARD_ITEM: "reveal_clipboard_item",
   SAVE_CLIPBOARD_IMAGE_TO_FILE: "save_clipboard_image_to_file",
   SET_AUTOSTART: "set_autostart",
+  SET_CLIPBOARD_SIDE_PANEL_OPEN: "set_clipboard_side_panel_open",
   SET_CLIPBOARD_WINDOW_AUTO_HIDE_SUSPENDED:
     "set_clipboard_window_auto_hide_suspended",
   SET_CLIPBOARD_WINDOW_EDITING: "set_clipboard_window_editing",

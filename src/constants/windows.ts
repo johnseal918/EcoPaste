@@ -7,6 +7,12 @@ export const WINDOW_LABEL = {
    */
   CLIPBOARD: "clipboard",
   /**
+   * 剪贴板右侧独立置顶面板。
+   */
+  CLIPBOARD_PINNED: "clipboard-pinned",
+  /** 左侧共享副面板宿主。 */
+  CLIPBOARD_SIDE_LEFT: "clipboard-side-left",
+  /**
    * 自定义右键菜单窗口（仅 Windows，绕开 muda `TrackPopupMenu` 抢焦点的问题）。
    */
   CONTEXT_MENU: "context-menu",

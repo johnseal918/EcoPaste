@@ -31,6 +31,14 @@ export type ClipboardAction =
   | "revealInExplorer"
   | "toggleFavorite"
   | "togglePinned"
+  | "addPriority"
+  | "priorityFirst"
+  | "priorityLast"
+  | "priorityMoveTo"
+  | "priorityCancel"
+  | "pinFirst"
+  | "pinLast"
+  | "pinMoveTo"
   | "moveToGroup"
   | "editNote"
   | "delete";
@@ -52,6 +60,8 @@ export interface ClipboardItem {
   useCount: number;
   isFavorite: boolean;
   isPinned: boolean;
+  priorityOrder: number | null;
+  pinOrder: number | null;
   isSensitive: boolean;
   platform: ClipboardPlatform;
   note: string | null;

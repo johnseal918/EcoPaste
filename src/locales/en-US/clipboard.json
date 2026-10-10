@@ -63,6 +63,19 @@
     "placeholder": "Add a note for this item...",
     "title": "Edit note"
   },
+  "ordering": {
+    "positionLabel": "Position",
+    "positionPlaceholder": "Enter position",
+    "positionTitle": "Move to Position"
+  },
+  "pinnedPanel": {
+    "empty": "No pinned items",
+    "moveFirst": "Move to First",
+    "moveLast": "Move to Last",
+    "moveTo": "Move to Position…",
+    "title": "Pinned",
+    "unpin": "Unpin"
+  },
   "quickActions": {
     "copy": "Copy",
     "copyPlain": "Copy as Plain Text",
@@ -101,6 +114,26 @@
     "switchCategory": "Switch category",
     "switchCustomGroup": "Switch custom group",
     "toggleRange": "Toggle all / favorites"
+  },
+  "sidePanels": {
+    "alwaysShow": "Always show",
+    "close": "Close panel",
+    "empty": {
+      "favorite": "No favorites",
+      "files": "No files",
+      "image": "No images",
+      "pinned": "No pinned items",
+      "text": "No text items"
+    },
+    "favorite": "Favorites",
+    "files": "Files",
+    "image": "Images",
+    "moveLeft": "Move left",
+    "moveRight": "Move right",
+    "moveToLeft": "Dock left of main panel",
+    "moveToRight": "Dock right of main panel",
+    "pinned": "Pinned",
+    "text": "Text"
   },
   "types": {
     "color": "Color",

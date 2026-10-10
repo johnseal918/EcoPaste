@@ -123,6 +123,10 @@ pub fn run() {
             commands::start_drag_clipboard_item,
             commands::toggle_clipboard_item_favorite,
             commands::toggle_clipboard_item_pinned,
+            commands::add_clipboard_item_priority,
+            commands::move_clipboard_item_priority,
+            commands::cancel_clipboard_item_priority,
+            commands::move_pinned_clipboard_item,
             commands::delete_clipboard_item,
             commands::clear_clipboard_items,
             commands::update_clipboard_item_note,
@@ -150,6 +154,8 @@ pub fn run() {
             commands::finish_onboarding,
             commands::detect_legacy_data,
             commands::import_legacy_data,
+            commands::get_clipboard_side_panels_state,
+            commands::set_clipboard_side_panel_open,
             commands::show_taskbar_icon,
             commands::position_window,
             commands::set_clipboard_window_pinned,
@@ -274,6 +280,23 @@ pub fn run() {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window::intercept_close_request(window) {
                     api.prevent_close();
+                }
+                return;
+            }
+
+            if window.label() == window::CLIPBOARD_WINDOW_LABEL
+                && matches!(
+                    event,
+                    WindowEvent::Moved(_)
+                        | WindowEvent::Resized(_)
+                        | WindowEvent::ScaleFactorChanged { .. }
+                )
+            {
+                let dpi_changed = matches!(event, WindowEvent::ScaleFactorChanged { .. });
+                if let Err(err) =
+                    window::handle_clipboard_geometry_event(window.app_handle(), dpi_changed)
+                {
+                    log::debug!("adjust clipboard windows to active display failed: {err}");
                 }
             }
         })

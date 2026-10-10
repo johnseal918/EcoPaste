@@ -1055,6 +1055,7 @@ async fn merge_history(current: &SqlitePool, backup: &SqlitePool) -> Result<Merg
     merge_file_type_icons(&mut tx, backup).await?;
     let outcome = merge_items(&mut tx, backup).await?;
     tx.commit().await.context("failed to commit import")?;
+    crate::db::items::normalize_item_orders(current).await?;
 
     Ok(outcome)
 }
@@ -1169,17 +1170,51 @@ async fn merge_items(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     backup: &SqlitePool,
 ) -> Result<MergeOutcome> {
-    let rows = sqlx::query_as::<_, BackupItemRow>(
-        "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-         summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
-         created_at, updated_at FROM clipboard_items ORDER BY created_at ASC",
-    )
-    .fetch_all(backup)
-    .await
-    .context("failed to read backup items")?;
+    let has_priority_order = backup_has_column(backup, "priority_order").await?;
+    let has_pin_order = backup_has_column(backup, "pin_order").await?;
+    let select: &'static str = match (has_priority_order, has_pin_order) {
+        (true, true) => {
+            "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
+             summary, file_types, size, width, height, use_count, is_favorite, is_pinned, priority_order, pin_order, is_sensitive, platform, note, \
+             created_at, updated_at FROM clipboard_items ORDER BY created_at ASC"
+        }
+        (true, false) => {
+            "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
+             summary, file_types, size, width, height, use_count, is_favorite, is_pinned, priority_order, NULL AS pin_order, is_sensitive, platform, note, \
+             created_at, updated_at FROM clipboard_items ORDER BY created_at ASC"
+        }
+        (false, true) => {
+            "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
+             summary, file_types, size, width, height, use_count, is_favorite, is_pinned, NULL AS priority_order, pin_order, is_sensitive, platform, note, \
+             created_at, updated_at FROM clipboard_items ORDER BY created_at ASC"
+        }
+        (false, false) => {
+            "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
+             summary, file_types, size, width, height, use_count, is_favorite, is_pinned, NULL AS priority_order, NULL AS pin_order, is_sensitive, platform, note, \
+             created_at, updated_at FROM clipboard_items ORDER BY created_at ASC"
+        }
+    };
+    let rows = sqlx::query_as::<_, BackupItemRow>(select)
+        .fetch_all(backup)
+        .await
+        .context("failed to read backup items")?;
 
     let mut imported_items = 0;
     let mut skipped_items = 0;
+    let priority_offset: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(priority_order), 0) FROM clipboard_items WHERE is_pinned = 0",
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .context("failed to read current priority order maximum")?;
+    let pin_offset: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(pin_order), 0) FROM clipboard_items WHERE is_pinned = 1",
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .context("failed to read current pin order maximum")?;
+    let mut legacy_pin_sequence = 0_i64;
+
     for row in rows {
         let exists: Option<i64> = sqlx::query_scalar(
             "SELECT 1 FROM clipboard_items WHERE kind = ? AND content_hash = ? LIMIT 1",
@@ -1194,12 +1229,20 @@ async fn merge_items(
             continue;
         }
 
+        let imported_priority_order = row.priority_order.map(|order| priority_offset + order);
+        let imported_pin_order = if row.is_pinned {
+            legacy_pin_sequence += 1;
+            Some(pin_offset + row.pin_order.unwrap_or(legacy_pin_sequence))
+        } else {
+            None
+        };
+
         sqlx::query(
             "INSERT OR IGNORE INTO clipboard_items \
              (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-              summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
+              summary, file_types, size, width, height, use_count, is_favorite, is_pinned, priority_order, pin_order, is_sensitive, platform, note, \
               created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(row.id)
         .bind(row.kind)
@@ -1217,6 +1260,8 @@ async fn merge_items(
         .bind(row.use_count)
         .bind(row.is_favorite)
         .bind(row.is_pinned)
+        .bind(imported_priority_order)
+        .bind(imported_pin_order)
         .bind(row.is_sensitive)
         .bind(row.platform)
         .bind(row.note)
@@ -1252,11 +1297,22 @@ struct BackupItemRow {
     use_count: i64,
     is_favorite: bool,
     is_pinned: bool,
+    priority_order: Option<i64>,
+    pin_order: Option<i64>,
     is_sensitive: bool,
     platform: String,
     note: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+}
+
+async fn backup_has_column(pool: &SqlitePool, column: &str) -> Result<bool> {
+    let columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('clipboard_items')")
+            .fetch_all(pool)
+            .await
+            .context("failed to inspect backup clipboard_items schema")?;
+    Ok(columns.iter().any(|name| name == column))
 }
 
 struct WatcherPauseRestore {
@@ -1602,6 +1658,8 @@ mod tests {
             use_count: 1,
             is_favorite: false,
             is_pinned: false,
+            priority_order: None,
+            pin_order: None,
             is_sensitive: true,
             platform: Platform::Macos,
             note: None,

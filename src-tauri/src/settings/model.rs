@@ -151,6 +151,7 @@ pub struct Clipboard {
     pub preview: Preview,
     pub feedback: Feedback,
     pub filters: Filters,
+    pub side_panels: SidePanels,
 }
 
 /// 剪贴板内容类型采集开关。关闭后监听与手动读取都不入库对应类型。
@@ -617,6 +618,48 @@ pub enum WindowPosition {
     #[default]
     FollowCursor,
     Center,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum SidePanelKind {
+    Pinned,
+    Favorite,
+    Text,
+    Image,
+    Files,
+}
+
+impl SidePanelKind {
+    pub const ALL: [Self; 5] = [
+        Self::Pinned,
+        Self::Favorite,
+        Self::Text,
+        Self::Image,
+        Self::Files,
+    ];
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SidePanels {
+    /// 所有副面板的稳定排列顺序。当前关闭的面板也保留位置，重新打开后回到原位。
+    pub order: Vec<SidePanelKind>,
+    /// 每次呼出主剪贴板窗口时自动打开的副面板。
+    /// 未列入这里的面板只在当前这次手动打开期间显示。
+    pub always_show: Vec<SidePanelKind>,
+    /// 仅记录左侧的面板；缺省兼容旧版右侧布局。
+    pub left: Vec<SidePanelKind>,
+}
+
+impl Default for SidePanels {
+    fn default() -> Self {
+        Self {
+            order: SidePanelKind::ALL.to_vec(),
+            always_show: Vec::new(),
+            left: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

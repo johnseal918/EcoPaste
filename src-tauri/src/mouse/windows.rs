@@ -11,7 +11,9 @@ use winapi::um::winuser::{
     MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN,
 };
 
-use crate::window::{self, CLIPBOARD_WINDOW_LABEL};
+use crate::window::{
+    self, CLIPBOARD_PINNED_WINDOW_LABEL, CLIPBOARD_SIDE_LEFT_WINDOW_LABEL, CLIPBOARD_WINDOW_LABEL,
+};
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static HOOK_THREAD_ID: Mutex<Option<u32>> = Mutex::new(None);
@@ -101,7 +103,13 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
 }
 
 fn cursor_outside_clipboard_window(app: &AppHandle, cursor: POINT) -> bool {
-    let Some(window) = app.get_webview_window(CLIPBOARD_WINDOW_LABEL) else {
+    !point_inside_window(app, CLIPBOARD_WINDOW_LABEL, cursor)
+        && !point_inside_window(app, CLIPBOARD_PINNED_WINDOW_LABEL, cursor)
+        && !point_inside_window(app, CLIPBOARD_SIDE_LEFT_WINDOW_LABEL, cursor)
+}
+
+fn point_inside_window(app: &AppHandle, label: &str, cursor: POINT) -> bool {
+    let Some(window) = app.get_webview_window(label) else {
         return false;
     };
     if !window.is_visible().unwrap_or(false) {
@@ -115,10 +123,10 @@ fn cursor_outside_clipboard_window(app: &AppHandle, cursor: POINT) -> bool {
         return false;
     };
 
-    cursor.x < position.x
-        || cursor.x >= position.x + size.width as i32
-        || cursor.y < position.y
-        || cursor.y >= position.y + size.height as i32
+    cursor.x >= position.x
+        && cursor.x < position.x + size.width as i32
+        && cursor.y >= position.y
+        && cursor.y < position.y + size.height as i32
 }
 
 /// 钩子收到的 `cursor` 是 physical 坐标，菜单矩形也用 physical 比对，
