@@ -20,7 +20,10 @@ const MIN_CLIPBOARD_HEIGHT_LOGICAL: f64 = 420.0;
 /// *once* to a compact 500 DIP default; don't shrink intentional resizes on
 /// later launches.
 const COMPACT_CLIPBOARD_HEIGHT_LOGICAL: f64 = 500.0;
-const WINDOW_SIZE_VERSION: u8 = 1;
+// Version 1 only normalized legacy height. It preserved oversized saved widths
+// and stopped compacting a window if a hide/exit had already stored version=1.
+// Version 2 migrates both axes to the configured compact defaults exactly once.
+const WINDOW_SIZE_VERSION: u8 = 2;
 /// Reserve a little space for the taskbar when checking a saved screen rect.
 const BOTTOM_SAFE_MARGIN_LOGICAL: f64 = 48.0;
 
@@ -32,6 +35,28 @@ fn restored_width_with_main_floor(label: &str, saved_physical: u32, scale: f64) 
     saved_physical.max(physical_floor.max(1))
 }
 
+/// A previous build accepted any persisted width above 360 logical pixels.
+/// That old width survives default changes, so the main window can appear
+/// much wider than its right companion. During the v2 migration, restore
+/// precisely the ORIGINAL main-window default width of 360 logical pixels.
+/// Only legacy states are reset. New manual resizes remain persistent.
+fn restored_width_by_state_version(
+    label: &str,
+    saved_physical: u32,
+    scale: f64,
+    sizing_version: u8,
+) -> u32 {
+    if label != super::CLIPBOARD_WINDOW_LABEL
+        || sizing_version >= WINDOW_SIZE_VERSION
+        || !scale.is_finite()
+        || scale <= 0.0
+    {
+        return restored_width_with_main_floor(label, saved_physical, scale);
+    }
+    let compact_width = (MIN_CLIPBOARD_WIDTH_LOGICAL * scale).ceil() as u32;
+    restored_width_with_main_floor(label, saved_physical.min(compact_width), scale)
+}
+
 fn restored_height_with_main_floor(label: &str, saved_physical: u32, scale: f64) -> u32 {
     if label != super::CLIPBOARD_WINDOW_LABEL || !scale.is_finite() || scale <= 0.0 {
         return saved_physical;
@@ -40,10 +65,10 @@ fn restored_height_with_main_floor(label: &str, saved_physical: u32, scale: f64)
     saved_physical.max(physical_floor.max(1))
 }
 
-/// Previous builds wrote state.height with a 600-DIP floor, producing 900
-/// physical pixels at 150% DPI. When that saved geometry is first opened by
-/// the compact build, it should not force an oversized or clipped main window.
-/// After the first save, version=1 and the user's actual resize is respected.
+/// Previous builds wrote state.height with a 600-DIP floor, and even the
+/// initial compact-height migration could be bypassed by an already-versioned
+/// saved state. Migrate versions 0 and 1 to at most 500 logical pixels.
+/// Once stored as version 2, preserve the user's subsequent explicit resize.
 fn restored_height_by_state_version(
     label: &str,
     saved_physical: u32,
@@ -104,7 +129,7 @@ pub struct WindowState {
     pub y: i32,
     pub width: u32,
     pub height: u32,
-    /// 0 means a legacy state saved with the 600-DIP forced floor.
+    /// 0/1 = old saved geometry, 2 = migrated compact default or manual resize.
     #[serde(default)]
     pub sizing_version: u8,
 }
@@ -245,7 +270,8 @@ pub fn restore_window_state(app: &AppHandle, label: &str) -> Result<bool> {
         .ok_or_else(|| anyhow::anyhow!("window not found: {label}"))?;
 
     let scale = window.scale_factor().map_err(|e| anyhow::anyhow!(e))?;
-    let mut width = restored_width_with_main_floor(label, state.width, scale);
+    let mut width =
+        restored_width_by_state_version(label, state.width, scale, state.sizing_version);
     let mut height =
         restored_height_by_state_version(label, state.height, scale, state.sizing_version);
     let monitors = window
@@ -304,8 +330,8 @@ pub fn restore_window_state(app: &AppHandle, label: &str) -> Result<bool> {
         actual_y = actual.y;
     }
 
-    // Persist the one-time compact migration immediately. Subsequent user
-    // resizes get version=1 and must not be auto-shrunk again.
+    // Persist the once-only v2 migration immediately. Subsequent manual
+    // resizes get version=2 and are never auto-shrunk on reopen.
     if label == super::CLIPBOARD_WINDOW_LABEL
         && (state.sizing_version < WINDOW_SIZE_VERSION
             || width != state.width
@@ -331,7 +357,10 @@ pub fn restore_window_state(app: &AppHandle, label: &str) -> Result<bool> {
 
 #[cfg(test)]
 mod compact_window_restoration_tests {
-    use super::{fit_saved_rect, restored_height_by_state_version, WindowState};
+    use super::{
+        fit_saved_rect, restored_height_by_state_version, restored_width_by_state_version,
+        WindowState,
+    };
 
     #[test]
     fn old_forced_height_is_compacted_once_by_dpi() {
@@ -345,12 +374,41 @@ mod compact_window_restoration_tests {
         );
         assert_eq!(
             restored_height_by_state_version("clipboard", 900, 1.5, 1),
-            900
+            750
         );
         assert_eq!(
             restored_height_by_state_version("clipboard-pinned", 900, 1.5, 0),
             900
         );
+        assert_eq!(
+            restored_height_by_state_version("clipboard", 900, 1.5, 2),
+            900
+        );
+    }
+
+    #[test]
+    fn v2_resets_oversized_saved_main_width_to_original_default_once() {
+        // Screenshot: old saved width is larger than the original default.
+        assert_eq!(restored_width_by_state_version("clipboard", 548, 1.25, 1), 450);
+        assert_eq!(restored_width_by_state_version("clipboard", 548, 1.20, 1), 432);
+        // The original 360-DIP default at 150% is already 540 physical px.
+        assert_eq!(restored_width_by_state_version("clipboard", 540, 1.5, 0), 540);
+        // A user resize made after v2 must persist, including a larger width.
+        assert_eq!(restored_width_by_state_version("clipboard", 548, 1.25, 2), 548);
+        // Side panel sizes follow their own layout code; do not normalize.
+        assert_eq!(
+            restored_width_by_state_version("clipboard-pinned", 430, 1.25, 0),
+            430
+        );
+    }
+
+    #[test]
+    fn v2_resets_oversized_height_even_when_legacy_marked_version_one() {
+        assert_eq!(restored_height_by_state_version("clipboard", 904, 1.25, 1), 625);
+        assert_eq!(restored_height_by_state_version("clipboard", 904, 1.20, 1), 600);
+        assert_eq!(restored_height_by_state_version("clipboard", 904, 1.25, 2), 904);
+        // Do not expand a legitimate already-compact legacy height.
+        assert_eq!(restored_height_by_state_version("clipboard", 550, 1.25, 1), 550);
     }
 
     #[test]
