@@ -46,7 +46,8 @@ interface KeyboardPreviewTarget {
 export function useClipboardPreviewController(
   options: UseClipboardPreviewControllerOptions,
 ) {
-  const { getActiveItem, itemElementMapRef, onHoverSelect } = options;
+  const { getActiveItem, itemElementMapRef, onHoverSelect, sourceWindowLabel } =
+    options;
   const [previewSession, setPreviewSession] = useState<PreviewSession | null>(
     null,
   );
@@ -75,7 +76,7 @@ export function useClipboardPreviewController(
       clearHoverTimer(hoverHideTimerRef);
       previewSessionRef.current = null;
       setPreviewSession(null);
-      closeClipboardPreviewSilently("hoverDisabled");
+      closeClipboardPreviewSilently("hoverDisabled", sourceWindowLabel);
       return;
     }
 
@@ -87,7 +88,7 @@ export function useClipboardPreviewController(
       clearHoverTimer(hoverHideTimerRef);
       previewSessionRef.current = null;
       setPreviewSession(null);
-      closeClipboardPreviewSilently("spaceDisabled");
+      closeClipboardPreviewSilently("spaceDisabled", sourceWindowLabel);
     }
   }, [
     previewSettings.hoverEnabled,
@@ -150,7 +151,7 @@ export function useClipboardPreviewController(
     cancelPreviewMoveFrame();
     cancelKeyboardPreviewFrame();
     commitPreviewSession(null);
-    closeClipboardPreviewSilently(reason);
+    closeClipboardPreviewSilently(reason, sourceWindowLabel);
   };
 
   /**
@@ -364,13 +365,17 @@ export function useClipboardPreviewController(
     try {
       if (!clipboardWindowVisibleRef.current) return;
 
-      const state = await showClipboardPreview(item.id, {
-        height: rect.height,
-        left: rect.left,
-        pointerY,
-        top: rect.top,
-        width: rect.width,
-      });
+      const state = await showClipboardPreview(
+        item.id,
+        {
+          height: rect.height,
+          left: rect.left,
+          pointerY,
+          top: rect.top,
+          width: rect.width,
+        },
+        sourceWindowLabel,
+      );
 
       if (requestId !== previewOpenRequestIdRef.current) return;
       if (!state || !clipboardWindowVisibleRef.current) {

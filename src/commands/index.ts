@@ -1387,27 +1387,30 @@ export const setClipboardWindowEditing = async (
 };
 
 /**
- * 打开或重定向剪贴板系统级预览 overlay。
- * `anchor` 是剪贴板窗口 webview client 坐标中的列表项矩形。
+ * 打开或重定向现有剪贴板预览。锚点坐标始终是发起请求的
+ * WebView 的 client 坐标；未提供源窗口时保持原版主面板行为。
  */
 export const showClipboardPreview = (
   itemId: string,
   anchor: PreviewAnchorRect,
+  sourceWindowLabel?: string,
 ) => {
   return call<ClipboardPreviewState | null>(
     TAURI_COMMAND.SHOW_CLIPBOARD_PREVIEW,
     "commands:labels.openPreview",
-    { anchor, itemId },
+    { anchor, itemId, sourceWindowLabel },
   );
 };
 
 /**
- * 关闭剪贴板系统级预览 overlay。
+ * 仅关闭由本窗口发起的悬停预览，避免左/右窗口互相取消新预览。
+ * 省略窗口标签则按原版主面板请求处理。
  */
-export const closeClipboardPreview = () => {
+export const closeClipboardPreview = (sourceWindowLabel?: string) => {
   return call<void>(
     TAURI_COMMAND.CLOSE_CLIPBOARD_PREVIEW,
     "commands:labels.closePreview",
+    { sourceWindowLabel },
   );
 };
 

@@ -1,8 +1,8 @@
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { MenuProps } from "antd";
 import { Dropdown, Empty, Spin, Switch } from "antd";
-import type { FC, MouseEvent as ReactMouseEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import type { FC, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Virtuoso } from "react-virtuoso";
 import { useSnapshot } from "valtio";
@@ -34,6 +34,7 @@ import type {
 import type { SidePanelKind } from "@/types/settings";
 import ClipboardCard from "../Clipboard/components/cards/ClipboardCard";
 import OrderPositionModal from "../Clipboard/components/OrderPositionModal";
+import { useClipboardPreviewController } from "../Clipboard/hooks/useClipboardPreviewController";
 
 interface ClipboardUpdatedPayload {
   metadata?: boolean;
@@ -52,10 +53,16 @@ interface SidePanelColumnProps {
   onMoveSide: (kind: SidePanelKind) => void;
   side: "left" | "right";
   onToggleAlwaysShow: (kind: SidePanelKind, enabled: boolean) => void;
+  onPreviewPointerEnter: (item: ClipboardItem, event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPreviewPointerMove: (item: ClipboardItem, event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPreviewPointerLeave: () => void;
+  onPreviewScroll: () => void;
+  onPreviewClose: (reason: string) => void;
 }
 
+const sidePreviewSourceLabel = getCurrentWebviewWindow().label;
 const hostSide =
-  getCurrentWebviewWindow().label === WINDOW_LABEL.CLIPBOARD_SIDE_LEFT
+  sidePreviewSourceLabel === WINDOW_LABEL.CLIPBOARD_SIDE_LEFT
     ? "left"
     : "right";
 
@@ -64,6 +71,34 @@ const PinnedPanel: FC = () => {
 
   const settings = useSnapshot(settingsState);
   const [openPanels, setOpenPanels] = useState<SidePanelKind[]>([]);
+  // Each left/right host has one controller shared by all five panel kinds.
+  // Track the actual hovered element; the same item may occur in two columns.
+  const hoveredElementRef = useRef(new Map<string, HTMLDivElement>());
+  const {
+    closeHoverPreviewForScroll,
+    closePreview,
+    handleItemPointerEnter,
+    handleItemPointerLeave,
+    handleItemPointerMove,
+    handlePreviewAreaPointerLeave,
+  } = useClipboardPreviewController({
+    getActiveItem: () => null,
+    itemElementMapRef: hoveredElementRef,
+    onHoverSelect: () => {},
+    sourceWindowLabel: sidePreviewSourceLabel,
+  });
+  const onPreviewPointerEnter = (
+    item: ClipboardItem, event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    hoveredElementRef.current.clear();
+    hoveredElementRef.current.set(item.id, event.currentTarget);
+    handleItemPointerEnter(item, event);
+  };
+  const onPreviewPointerMove = (
+    item: ClipboardItem, event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    handleItemPointerMove(item, event);
+  };
 
   useEffect(() => {
     void getClipboardSidePanelsState().then((state) => {
@@ -91,6 +126,7 @@ const PinnedPanel: FC = () => {
   ]);
 
   const handleClose = (kind: SidePanelKind) => {
+    closePreview("sidePanelClose");
     void setClipboardSidePanelOpen(kind, false).then((state) => {
       setOpenPanels(state.open);
     });
@@ -114,6 +150,7 @@ const PinnedPanel: FC = () => {
   };
 
   const handleMoveSide = (kind: SidePanelKind) => {
+    closePreview("sidePanelMoveSide");
     const current = [
       ...(settings.clipboard.sidePanels.left as SidePanelKind[]),
     ];
@@ -157,7 +194,9 @@ const PinnedPanel: FC = () => {
   };
 
   return (
-    <div className="size-screen overflow-x-auto overflow-y-hidden bg-ant-container">
+    <div className="size-screen overflow-x-auto overflow-y-hidden bg-ant-container"
+      onPointerLeave={handlePreviewAreaPointerLeave}
+    >
       <div className="flex h-full w-max min-w-full">
         {orderedOpenPanels.map((kind, index) => {
           return (
@@ -170,6 +209,11 @@ const PinnedPanel: FC = () => {
               onMove={handleMove}
               onMoveSide={handleMoveSide}
               onToggleAlwaysShow={handleToggleAlwaysShow}
+              onPreviewPointerEnter={onPreviewPointerEnter}
+              onPreviewPointerMove={onPreviewPointerMove}
+              onPreviewPointerLeave={handleItemPointerLeave}
+              onPreviewScroll={closeHoverPreviewForScroll}
+              onPreviewClose={closePreview}
               side={hostSide}
             />
           );
@@ -188,6 +232,11 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
     onMove,
     onMoveSide,
     onToggleAlwaysShow,
+    onPreviewPointerEnter,
+    onPreviewPointerMove,
+    onPreviewPointerLeave,
+    onPreviewScroll,
+    onPreviewClose,
     side,
   } = props;
   const { t } = useTranslation("clipboard");
@@ -285,6 +334,7 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
       ) : (
         <Virtuoso
           className="flex-1"
+          onScroll={onPreviewScroll}
           itemContent={(rowIndex) => {
             const left = getItem(rowIndex * 2);
             const right = getItem(rowIndex * 2 + 1);
@@ -325,8 +375,17 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
   function renderCard(item: ClipboardItem) {
     const handleMouseDown = (event: ReactMouseEvent<HTMLDivElement>) => {
       if (event.button !== 0) return;
-
+      onPreviewClose("sidePanelPaste");
       void pasteClipboardItem(item.id, false);
+    };
+    const previewProps = {
+      onPointerEnter: (event: ReactPointerEvent<HTMLDivElement>) => {
+        onPreviewPointerEnter(item, event);
+      },
+      onPointerLeave: onPreviewPointerLeave,
+      onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => {
+        onPreviewPointerMove(item, event);
+      },
     };
 
     if (kind === "favorite") {
@@ -354,6 +413,7 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
               hoverHighlight
               item={item}
               onMouseDown={handleMouseDown}
+              {...previewProps}
               quickActions={[]}
               showOriginalOnHover={false}
             />
@@ -368,6 +428,7 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
           hoverHighlight
           item={item}
           onMouseDown={handleMouseDown}
+          {...previewProps}
           quickActions={[]}
           showOriginalOnHover={false}
         />
@@ -414,6 +475,7 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
             hoverHighlight
             item={item}
             onMouseDown={handleMouseDown}
+            {...previewProps}
             quickActions={[]}
             showOriginalOnHover={false}
           />

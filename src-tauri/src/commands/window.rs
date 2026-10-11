@@ -137,13 +137,17 @@ pub async fn show_clipboard_preview(
     app: AppHandle,
     item_id: String,
     anchor: PreviewAnchorRect,
+    source_window_label: Option<String>,
 ) -> Result<Option<ClipboardPreviewState>> {
-    window::preview::show_clipboard_preview(&app, item_id, anchor)
+    window::preview::show_clipboard_preview(&app, item_id, anchor, source_window_label)
 }
 
 #[tauri::command]
-pub async fn close_clipboard_preview(app: AppHandle) -> Result<()> {
-    window::preview::close_clipboard_preview(&app)
+pub async fn close_clipboard_preview(
+    app: AppHandle,
+    source_window_label: Option<String>,
+) -> Result<()> {
+    window::preview::close_clipboard_preview_for_source(&app, source_window_label)
 }
 
 #[tauri::command]

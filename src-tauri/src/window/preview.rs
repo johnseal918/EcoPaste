@@ -20,7 +20,10 @@ use tauri::{
 
 use crate::core::Result;
 
-use super::{get_window, lifecycle, CLIPBOARD_PREVIEW_WINDOW_LABEL, CLIPBOARD_WINDOW_LABEL};
+use super::{
+    get_window, lifecycle, CLIPBOARD_PINNED_WINDOW_LABEL, CLIPBOARD_PREVIEW_WINDOW_LABEL,
+    CLIPBOARD_SIDE_LEFT_WINDOW_LABEL, CLIPBOARD_WINDOW_LABEL,
+};
 
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, ManagerExt, PanelLevel, WebviewWindowExt};
@@ -122,6 +125,8 @@ pub struct ClipboardPreviewState {
     pub request_id: u64,
     pub session_id: u64,
     pub item_id: String,
+    /// Which clipboard WebView provided the DOM-local card rectangle.
+    pub source_window_label: String,
     pub anchor: PreviewAnchorRect,
     pub scale_factor: f64,
     pub work_area: PreviewWorkArea,
@@ -134,21 +139,30 @@ pub fn show_clipboard_preview(
     app: &AppHandle,
     item_id: String,
     anchor: PreviewAnchorRect,
+    source_window_label: Option<String>,
 ) -> Result<Option<ClipboardPreviewState>> {
     validate_anchor(&anchor)?;
+    let source_label = preview_source_label(source_window_label.as_deref())?;
 
     if PREVIEW_SUPPRESSED.load(Ordering::SeqCst) || !is_clipboard_window_visible(app) {
         close_clipboard_preview_now(app)?;
         return Ok(None);
     }
 
+    // Side columns share a separate WebView from the main clipboard list.
+    // Do not interpret their DOM card rect as main-window-local coordinates.
+    let source_window = get_window(app, source_label)?;
+    if !source_window.is_visible().unwrap_or(false) {
+        return Ok(None);
+    }
+
     let request_id = PREVIEW_REQUEST_ID.fetch_add(1, Ordering::SeqCst) + 1;
     let session_id = preview_session_id_for_show();
     let window = ensure_preview_window(app)?;
-    let monitor = resolve_preview_monitor(app)?;
+    let monitor = resolve_preview_monitor(&source_window)?;
     let work_area = preview_overlay_bounds(&monitor);
     let scale_factor = monitor.scale_factor();
-    let clipboard_window = clipboard_window_rect(app);
+    let clipboard_window = source_window_rect(&source_window);
     let layout = build_preview_layout(&anchor, scale_factor, &work_area, clipboard_window.as_ref());
 
     prepare_preview_window_for_show(app, &window, &work_area)?;
@@ -157,6 +171,7 @@ pub fn show_clipboard_preview(
         request_id,
         session_id,
         item_id,
+        source_window_label: source_label.to_owned(),
         anchor,
         scale_factor,
         work_area: PreviewWorkArea {
@@ -176,6 +191,23 @@ pub fn show_clipboard_preview(
     show_preview_window(app, &window, &work_area)?;
 
     Ok(Some(state))
+}
+
+/// Ignore a late hover-leave/blur close from another WebView. Each of main,
+/// left and right windows owns only the previews it opened; switching panels
+/// must not dismiss a newer preview from the opposite window.
+pub fn close_clipboard_preview_for_source(
+    app: &AppHandle,
+    source_window_label: Option<String>,
+) -> Result<()> {
+    let source_label = preview_source_label(source_window_label.as_deref())?;
+    let Some(state) = get_clipboard_preview_state()? else {
+        return Ok(());
+    };
+    if state.source_window_label != source_label {
+        return Ok(());
+    }
+    close_clipboard_preview(app)
 }
 
 /// 隐藏预览窗口并清空当前预览状态。
@@ -320,6 +352,17 @@ fn preview_session_id_for_show() -> u64 {
     }
 
     PREVIEW_SESSION_ID.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// Side panels may only name the two known companion WebViews. A client cannot
+/// request preview geometry from arbitrary app windows (settings, backups, etc.).
+fn preview_source_label(label: Option<&str>) -> Result<&str> {
+    let label = label.unwrap_or(CLIPBOARD_WINDOW_LABEL);
+    match label {
+        CLIPBOARD_WINDOW_LABEL | CLIPBOARD_PINNED_WINDOW_LABEL
+        | CLIPBOARD_SIDE_LEFT_WINDOW_LABEL => Ok(label),
+        _ => Err(anyhow::anyhow!("invalid clipboard preview source window").into()),
+    }
 }
 
 fn validate_anchor(anchor: &PreviewAnchorRect) -> Result<()> {
@@ -532,16 +575,15 @@ fn raise_windows_preview_window(window: &WebviewWindow, show: bool) -> Result<()
     Ok(())
 }
 
-fn resolve_preview_monitor(app: &AppHandle) -> Result<tauri::Monitor> {
-    let clipboard_window = get_window(app, CLIPBOARD_WINDOW_LABEL)?;
-    if let Some(monitor) = clipboard_window
+fn resolve_preview_monitor(source_window: &WebviewWindow) -> Result<tauri::Monitor> {
+    if let Some(monitor) = source_window
         .current_monitor()
         .map_err(|e| anyhow::anyhow!(e))?
     {
         return Ok(monitor);
     }
 
-    clipboard_window
+    source_window
         .primary_monitor()
         .map_err(|e| anyhow::anyhow!(e))?
         .ok_or_else(|| anyhow::anyhow!("primary monitor not found").into())
@@ -784,9 +826,9 @@ fn inset_rect(rect: PreviewRect, amount: f64) -> PreviewRect {
     }
 }
 
-/// 返回剪贴板窗口内容区的屏幕几何，用于映射 WebView DOM rect 到预览 overlay 坐标。
-fn clipboard_window_rect(app: &AppHandle) -> Option<PreviewClipboardWindowRect> {
-    let window = app.get_webview_window(CLIPBOARD_WINDOW_LABEL)?;
+/// Returns the originating WebView's inner screen rect, so DOM coordinates
+/// from main/right/left map into the same existing overlay layout correctly.
+fn source_window_rect(window: &WebviewWindow) -> Option<PreviewClipboardWindowRect> {
     let pos = window.inner_position().ok()?;
     let size = window.inner_size().ok()?;
 
@@ -945,6 +987,52 @@ mod tests {
 
         assert_eq!(source.left, 92.0);
         assert_eq!(source.width, 120.0);
+    }
+
+    #[test]
+    fn accepts_only_clipboard_preview_source_windows() {
+        assert_eq!(preview_source_label(None).unwrap(), CLIPBOARD_WINDOW_LABEL);
+        assert_eq!(
+            preview_source_label(Some(CLIPBOARD_PINNED_WINDOW_LABEL)).unwrap(),
+            CLIPBOARD_PINNED_WINDOW_LABEL
+        );
+        assert_eq!(
+            preview_source_label(Some(CLIPBOARD_SIDE_LEFT_WINDOW_LABEL)).unwrap(),
+            CLIPBOARD_SIDE_LEFT_WINDOW_LABEL
+        );
+        assert!(preview_source_label(Some("preference")).is_err());
+        assert!(preview_source_label(Some("clipboard-preview")).is_err());
+    }
+
+    #[test]
+    fn maps_left_and_right_panel_cards_using_their_own_window_origins() {
+        let screen = PhysicalRect {
+            position: PhysicalPosition::new(100, 50),
+            size: PhysicalSize::new(2400, 1600),
+        };
+        let overlay = PreviewRect {
+            left: 0.0,
+            top: 0.0,
+            width: 1200.0,
+            height: 800.0,
+        };
+        let anchor = PreviewAnchorRect {
+            left: 20.0, top: 30.0, width: 100.0, height: 40.0,
+            pointer_y: Some(48.0),
+        };
+        let left = PreviewClipboardWindowRect {
+            x: 220, y: 250, width: 420, height: 700,
+        };
+        let right = PreviewClipboardWindowRect {
+            x: 1320, y: 250, width: 420, height: 700,
+        };
+        let a = resolve_source_rect(&anchor, 2.0, &screen, Some(&left), overlay);
+        let b = resolve_source_rect(&anchor, 2.0, &screen, Some(&right), overlay);
+        assert_eq!(a.left, 80.0);
+        assert_eq!(b.left, 630.0);
+        assert_eq!(a.top, 147.5);
+        assert_eq!(b.top, a.top);
+        assert_eq!(a.height, PREVIEW_POINTER_ANCHOR_SIZE);
     }
 
     #[test]
