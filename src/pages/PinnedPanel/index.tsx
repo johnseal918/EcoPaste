@@ -1,7 +1,11 @@
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { MenuProps } from "antd";
 import { Dropdown, Empty, Spin, Switch } from "antd";
-import type { FC, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import type {
+  FC,
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Virtuoso } from "react-virtuoso";
@@ -53,8 +57,14 @@ interface SidePanelColumnProps {
   onMoveSide: (kind: SidePanelKind) => void;
   side: "left" | "right";
   onToggleAlwaysShow: (kind: SidePanelKind, enabled: boolean) => void;
-  onPreviewPointerEnter: (item: ClipboardItem, event: ReactPointerEvent<HTMLDivElement>) => void;
-  onPreviewPointerMove: (item: ClipboardItem, event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPreviewPointerEnter: (
+    item: ClipboardItem,
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => void;
+  onPreviewPointerMove: (
+    item: ClipboardItem,
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => void;
   onPreviewPointerLeave: () => void;
   onPreviewScroll: () => void;
   onPreviewClose: (reason: string) => void;
@@ -88,14 +98,16 @@ const PinnedPanel: FC = () => {
     sourceWindowLabel: sidePreviewSourceLabel,
   });
   const onPreviewPointerEnter = (
-    item: ClipboardItem, event: ReactPointerEvent<HTMLDivElement>,
+    item: ClipboardItem,
+    event: ReactPointerEvent<HTMLDivElement>,
   ) => {
     hoveredElementRef.current.clear();
     hoveredElementRef.current.set(item.id, event.currentTarget);
     handleItemPointerEnter(item, event);
   };
   const onPreviewPointerMove = (
-    item: ClipboardItem, event: ReactPointerEvent<HTMLDivElement>,
+    item: ClipboardItem,
+    event: ReactPointerEvent<HTMLDivElement>,
   ) => {
     handleItemPointerMove(item, event);
   };
@@ -194,7 +206,8 @@ const PinnedPanel: FC = () => {
   };
 
   return (
-    <div className="size-screen overflow-x-auto overflow-y-hidden bg-ant-container"
+    <div
+      className="size-screen overflow-x-auto overflow-y-hidden bg-ant-container"
       onPointerLeave={handlePreviewAreaPointerLeave}
     >
       <div className="flex h-full w-max min-w-full">
@@ -208,12 +221,12 @@ const PinnedPanel: FC = () => {
               onClose={handleClose}
               onMove={handleMove}
               onMoveSide={handleMoveSide}
-              onToggleAlwaysShow={handleToggleAlwaysShow}
-              onPreviewPointerEnter={onPreviewPointerEnter}
-              onPreviewPointerMove={onPreviewPointerMove}
-              onPreviewPointerLeave={handleItemPointerLeave}
-              onPreviewScroll={closeHoverPreviewForScroll}
               onPreviewClose={closePreview}
+              onPreviewPointerEnter={onPreviewPointerEnter}
+              onPreviewPointerLeave={handleItemPointerLeave}
+              onPreviewPointerMove={onPreviewPointerMove}
+              onPreviewScroll={closeHoverPreviewForScroll}
+              onToggleAlwaysShow={handleToggleAlwaysShow}
               side={hostSide}
             />
           );
@@ -334,7 +347,6 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
       ) : (
         <Virtuoso
           className="flex-1"
-          onScroll={onPreviewScroll}
           itemContent={(rowIndex) => {
             const left = getItem(rowIndex * 2);
             const right = getItem(rowIndex * 2 + 1);
@@ -346,6 +358,7 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
               </div>
             );
           }}
+          onScroll={onPreviewScroll}
           rangeChanged={({ startIndex, endIndex }) => {
             loadRange(startIndex * 2, endIndex * 2 + 1);
           }}

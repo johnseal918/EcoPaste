@@ -359,7 +359,8 @@ fn preview_session_id_for_show() -> u64 {
 fn preview_source_label(label: Option<&str>) -> Result<&str> {
     let label = label.unwrap_or(CLIPBOARD_WINDOW_LABEL);
     match label {
-        CLIPBOARD_WINDOW_LABEL | CLIPBOARD_PINNED_WINDOW_LABEL
+        CLIPBOARD_WINDOW_LABEL
+        | CLIPBOARD_PINNED_WINDOW_LABEL
         | CLIPBOARD_SIDE_LEFT_WINDOW_LABEL => Ok(label),
         _ => Err(anyhow::anyhow!("invalid clipboard preview source window").into()),
     }
@@ -1017,14 +1018,23 @@ mod tests {
             height: 800.0,
         };
         let anchor = PreviewAnchorRect {
-            left: 20.0, top: 30.0, width: 100.0, height: 40.0,
+            left: 20.0,
+            top: 30.0,
+            width: 100.0,
+            height: 40.0,
             pointer_y: Some(48.0),
         };
         let left = PreviewClipboardWindowRect {
-            x: 220, y: 250, width: 420, height: 700,
+            x: 220,
+            y: 250,
+            width: 420,
+            height: 700,
         };
         let right = PreviewClipboardWindowRect {
-            x: 1320, y: 250, width: 420, height: 700,
+            x: 1320,
+            y: 250,
+            width: 420,
+            height: 700,
         };
         let a = resolve_source_rect(&anchor, 2.0, &screen, Some(&left), overlay);
         let b = resolve_source_rect(&anchor, 2.0, &screen, Some(&right), overlay);
