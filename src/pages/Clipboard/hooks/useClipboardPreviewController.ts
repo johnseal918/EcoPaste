@@ -94,6 +94,7 @@ export function useClipboardPreviewController(
     previewSettings.hoverEnabled,
     previewSettings.spaceEnabled,
     previewSession?.trigger,
+    sourceWindowLabel,
   ]);
 
   useEffect(() => {
