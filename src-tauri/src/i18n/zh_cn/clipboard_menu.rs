@@ -23,6 +23,7 @@ pub fn label(key: Key) -> &'static str {
         Key::CancelPriority => "取消排序",
         Key::MoveToGroup => "移动到分组",
         Key::AddNote => "添加备注",
+        Key::EditContent => "编辑内容…",
         Key::EditNote => "编辑备注",
         Key::Delete => "删除",
     }

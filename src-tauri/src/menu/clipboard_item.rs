@@ -46,6 +46,7 @@ pub enum ClipboardMenuAction {
     PinLast,
     PinMoveTo,
     MoveToGroup,
+    EditContent,
     EditNote,
     Delete,
 }
@@ -91,6 +92,7 @@ impl ClipboardMenuAction {
             Self::PriorityMoveTo | Self::PinMoveTo => Key::MoveToPosition,
             Self::PriorityCancel => Key::CancelPriority,
             Self::MoveToGroup => Key::MoveToGroup,
+            Self::EditContent => Key::EditContent,
             Self::EditNote => {
                 if has_note {
                     Key::EditNote
@@ -125,6 +127,7 @@ impl ClipboardMenuAction {
             | Self::PinLast
             | Self::PinMoveTo
             | Self::MoveToGroup => None,
+            Self::EditContent => None,
             Self::EditNote => Some("CmdOrCtrl+M"),
             Self::Delete => Some("CmdOrCtrl+Backspace"),
         }
@@ -158,6 +161,7 @@ pub(super) const ACTION_GROUPS: &[&[ClipboardMenuAction]] = &[
         ClipboardMenuAction::PinLast,
         ClipboardMenuAction::PinMoveTo,
         ClipboardMenuAction::MoveToGroup,
+        ClipboardMenuAction::EditContent,
         ClipboardMenuAction::EditNote,
     ],
     &[ClipboardMenuAction::Delete],
@@ -257,6 +261,7 @@ mod native {
                 Self::PinLast => "cim::pinLast",
                 Self::PinMoveTo => "cim::pinMoveTo",
                 Self::MoveToGroup => "cim::moveToGroup",
+                Self::EditContent => "cim::editContent",
                 Self::EditNote => "cim::editNote",
                 Self::Delete => "cim::delete",
             }
@@ -284,7 +289,8 @@ mod native {
                 ClipboardMenuAction::PinLast,
                 ClipboardMenuAction::PinMoveTo,
                 ClipboardMenuAction::MoveToGroup,
-                ClipboardMenuAction::EditNote,
+                ClipboardMenuAction::EditContent,
+        ClipboardMenuAction::EditNote,
                 ClipboardMenuAction::Delete,
             ];
             if id.starts_with(MOVE_GROUP_PREFIX) {

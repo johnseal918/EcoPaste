@@ -20,6 +20,7 @@ pub enum ClipboardMenuKey {
     CancelPriority,
     MoveToGroup,
     AddNote,
+    EditContent,
     EditNote,
     Delete,
 }

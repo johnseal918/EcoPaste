@@ -161,6 +161,8 @@ pub enum ClipboardAction {
     PinLast,
     /// 置顶项：移动到指定位置。
     PinMoveTo,
+    /// 编辑实际粘贴正文（仅文本条目）。
+    EditContent,
     /// 编辑备注（恒在）。
     EditNote,
     /// 删除条目（恒在）。

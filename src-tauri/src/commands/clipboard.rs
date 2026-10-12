@@ -13,7 +13,8 @@ use tauri_plugin_dialog::DialogExt;
 use crate::clipboard::{
     add_app_from_path, build_item_with_settings, delete_unreferenced_apps, detect_frontmost,
     materialize_source, persist_and_notify, refresh_running_apps, sanitize_css_color, AppIconStore,
-    AppsRegistry, ClipboardReader, FileIconStore, ImageStore, WritebackGuard,
+    AppsRegistry, ClipboardPayload, ClipboardReader, FileIconStore, ImageStore, TextPayload,
+    WritebackGuard, write_edited_plain_text,
 };
 use crate::core::{AppError, Result};
 use crate::db::items::{
@@ -351,6 +352,142 @@ pub async fn get_clipboard_preview_payload(
     Ok(Some(payload))
 }
 
+/// 读取完整文本，不能用列表摘要冒充原文；HTML/RTF 使用原生纯文本表示。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditableClipboardText {
+    pub text: String,
+    pub plain_text_from_rich: bool,
+}
+
+fn editable_text_from_item(item: &ClipboardItem, redact_secrets: bool) -> Result<EditableClipboardText> {
+    if item.kind != ClipboardKind::Text {
+        return Err(AppError::Clipboard("only text clipboard records can be edited".to_owned()));
+    }
+    if item.is_sensitive && redact_secrets {
+        return Err(AppError::Clipboard(
+            "this sensitive record is hidden by the redaction setting".to_owned(),
+        ));
+    }
+    let rich = matches!(item.sub_kind, Some(ClipboardSubKind::Html | ClipboardSubKind::Rtf));
+    let content = if rich {
+        item.search_text.as_deref().ok_or_else(|| {
+            AppError::Clipboard("plain text representation of rich text is unavailable".to_owned())
+        })?
+    } else {
+        item.content.as_str()
+    };
+    Ok(EditableClipboardText {
+        text: content.to_owned(),
+        plain_text_from_rich: rich,
+    })
+}
+
+fn validate_edited_text(text: &str) -> Result<()> {
+    if text.trim().is_empty() {
+        return Err(AppError::Clipboard("edited text cannot be empty".to_owned()));
+    }
+    Ok(())
+}
+
+async fn check_edit_source(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    source_id: &str,
+) -> Result<EditableClipboardText> {
+    let item = find_item_by_id(pool, source_id)
+        .await?
+        .ok_or_else(|| AppError::Clipboard("original clipboard item not found".to_owned()))?;
+    let redact = app.state::<SettingsStore>().snapshot().clipboard.sensitive.redact_secrets;
+    editable_text_from_item(&item, redact)
+}
+
+/// 编辑框读取专用：敏感遮罩开启时不能暴露完整明文。
+#[tauri::command]
+pub async fn get_editable_clipboard_text(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    source_id: String,
+) -> Result<EditableClipboardText> {
+    let pool = db.pool().await;
+    check_edit_source(&app, &pool, &source_id).await
+}
+
+/// 临时复制编辑结果，只写系统剪贴板，不修改原历史。
+#[tauri::command]
+pub async fn copy_edited_clipboard_text(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    guard: State<'_, Arc<WritebackGuard>>,
+    source_id: String,
+    text: String,
+) -> Result<()> {
+    validate_edited_text(&text)?;
+    let pool = db.pool().await;
+    check_edit_source(&app, &pool, &source_id).await?;
+    write_edited_plain_text(guard.inner().as_ref(), &text)
+}
+
+/// 临时粘贴编辑结果，复用原有写回保护和系统粘贴，不新建历史记录。
+#[tauri::command]
+pub async fn paste_edited_clipboard_text(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    guard: State<'_, Arc<WritebackGuard>>,
+    source_id: String,
+    text: String,
+) -> Result<()> {
+    validate_edited_text(&text)?;
+    let pool = db.pool().await;
+    check_edit_source(&app, &pool, &source_id).await?;
+    write_edited_plain_text(guard.inner().as_ref(), &text)?;
+    finish_paste(&app, true).await
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveEditedClipboardTextResult {
+    pub id: String,
+    pub deduplicated: bool,
+}
+
+/// 另存为独立文本记录；保持原记录不变，沿用既有去重、密钥识别及更新事件。
+#[tauri::command]
+pub async fn save_edited_clipboard_text(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    store: State<'_, ImageStore>,
+    source_id: String,
+    text: String,
+) -> Result<SaveEditedClipboardTextResult> {
+    validate_edited_text(&text)?;
+    let pool = db.pool().await;
+    check_edit_source(&app, &pool, &source_id).await?;
+
+    let settings = app.state::<SettingsStore>().snapshot();
+    let mut capture = settings.clipboard.capture.clone();
+    // 用户主动另存不依赖自动采集开关，文本大小和敏感内容策略仍生效。
+    capture.text = true;
+    let payload = ClipboardPayload::Text(TextPayload {
+        text,
+        html: None,
+        rtf: None,
+    });
+    let item = build_item_with_settings(
+        &store,
+        &payload,
+        &capture,
+        &settings.clipboard.sensitive,
+        true,
+    )?
+    .ok_or_else(|| AppError::Clipboard("edited text exceeds capture/privacy limits".to_owned()))?;
+    let result = persist_and_notify(&app, &pool, &item, None).await?;
+    Ok(SaveEditedClipboardTextResult {
+        id: result.id,
+        deduplicated: result.deduplicated,
+    })
+}
+
 /// 播放一次复制成功提示音，用于偏好设置页试听。
 #[tauri::command]
 pub async fn play_copy_sound() {
@@ -435,6 +572,14 @@ pub async fn paste_clipboard_item(
     )?;
     mark_item_reused_if_enabled(&app, &pool, &id, item.kind).await?;
 
+    finish_paste(&app, false).await
+}
+
+/// 将编辑态恢复前台目标后沿用原系统粘贴动作，普通历史粘贴逻辑不变。
+async fn finish_paste(app: &AppHandle, restore_editor_focus: bool) -> Result<()> {
+    if restore_editor_focus {
+        window::set_clipboard_window_editing(app, CLIPBOARD_WINDOW_LABEL, false)?;
+    }
     if window::is_clipboard_window_pinned() {
         // 固定时窗口保持可见：macOS 上 panel 仍是 key window 会吞掉 ⌘V，需先 resign key
         // 让键焦点回到前台 App 的窗口；Windows 剪贴板窗口 focusable=false，无需处理。
@@ -759,7 +904,10 @@ fn compute_available_actions(item: &ClipboardItem) -> Vec<ClipboardAction> {
     actions.push(ClipboardAction::Paste);
 
     match item.kind {
-        ClipboardKind::Text => actions.push(ClipboardAction::PasteAsPlainText),
+        ClipboardKind::Text => {
+            actions.push(ClipboardAction::PasteAsPlainText);
+            actions.push(ClipboardAction::EditContent);
+        }
         ClipboardKind::Files => actions.push(ClipboardAction::PasteAsPath),
         ClipboardKind::Image => {}
     }
@@ -1876,6 +2024,33 @@ mod tests {
         let actions = compute_available_actions(&text_item(None, false));
 
         assert!(!actions.contains(&ClipboardAction::SaveImage));
+    }
+
+    #[test]
+    fn edited_source_uses_full_plain_for_html_without_modifying_original() {
+        let mut item = text_item(Some(ClipboardSubKind::Html), false);
+        item.content = "<p>Hello <b>世界</b></p>".to_owned();
+        item.search_text = Some("Hello 世界".to_owned());
+        let result = editable_text_from_item(&item, true).unwrap();
+        assert_eq!(result.text, "Hello 世界");
+        assert!(result.plain_text_from_rich);
+        assert_eq!(item.content, "<p>Hello <b>世界</b></p>");
+    }
+
+    #[test]
+    fn edited_source_rejects_non_text_missing_plain_and_hidden_secrets() {
+        assert!(editable_text_from_item(&image_item(), false).is_err());
+        assert!(editable_text_from_item(&text_item(Some(ClipboardSubKind::Rtf), false), false).is_err());
+        assert!(editable_text_from_item(&text_item(None, true), true).is_err());
+        assert!(editable_text_from_item(&text_item(None, true), false).is_ok());
+    }
+
+    #[test]
+    fn edit_action_is_text_only_and_whitespace_only_edits_are_rejected() {
+        assert!(compute_available_actions(&text_item(None, false)).contains(&ClipboardAction::EditContent));
+        assert!(!compute_available_actions(&image_item()).contains(&ClipboardAction::EditContent));
+        assert!(validate_edited_text("  \n  ").is_err());
+        assert!(validate_edited_text("  你好\n ").is_ok());
     }
 
     #[test]

@@ -23,6 +23,7 @@ pub fn label(key: Key) -> &'static str {
         Key::CancelPriority => "Remove Manual Order",
         Key::MoveToGroup => "Move to Group",
         Key::AddNote => "Add Note",
+        Key::EditContent => "Edit Content…",
         Key::EditNote => "Edit Note",
         Key::Delete => "Delete",
     }

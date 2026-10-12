@@ -44,6 +44,14 @@ pub fn write_to_clipboard(
     Ok(())
 }
 
+/// 编辑器临时纯文本写回：不创建历史记录，复用既有回环抑制。
+pub fn write_edited_plain_text(guard: &WritebackGuard, text: &str) -> Result<()> {
+    let ctx = ClipboardContext::new().map_err(clip_err)?;
+    guard.suppress(content_hash(ClipboardKind::Text, text));
+    ctx.set(vec![ClipboardContent::Text(text.to_owned())])
+        .map_err(clip_err)
+}
+
 fn write_text(
     ctx: &ClipboardContext,
     guard: &WritebackGuard,

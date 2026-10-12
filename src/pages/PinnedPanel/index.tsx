@@ -1,3 +1,4 @@
+import { emitTo } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { MenuProps } from "antd";
 import { Dropdown, Empty, Spin, Switch } from "antd";
@@ -401,9 +402,19 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
       },
     };
 
+    const requestEdit = async () => {
+      onPreviewClose("sidePanelEditContent");
+      await emitTo(WINDOW_LABEL.CLIPBOARD, TAURI_EVENT.CLIPBOARD_EDIT_REQUEST, {
+        itemId: item.id,
+      });
+    };
+
     if (kind === "favorite") {
       const menu: MenuProps = {
         items: [
+          ...(item.kind === "text"
+            ? [{ key: "editContent", label: t("contentEditor.menu") }]
+            : []),
           {
             key: "unfavorite",
             label: t("quickActions.starActive"),
@@ -411,6 +422,10 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
         ],
         onClick: async ({ key, domEvent }) => {
           domEvent.stopPropagation();
+          if (key === "editContent") {
+            await requestEdit();
+            return;
+          }
           if (key !== "unfavorite") return;
 
           await toggleClipboardItemFavorite(item.id, false);
@@ -455,10 +470,17 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
         { key: "position", label: t("pinnedPanel.moveTo") },
         { type: "divider" },
         { key: "unpin", label: t("pinnedPanel.unpin") },
+        ...(item.kind === "text"
+          ? [{ type: "divider" as const, key: "editDivider" }, { key: "editContent", label: t("contentEditor.menu") }]
+          : []),
       ],
       onClick: async ({ key, domEvent }) => {
         domEvent.stopPropagation();
 
+        if (key === "editContent") {
+          await requestEdit();
+          return;
+        }
         if (key === "first") {
           await movePinnedClipboardItem(item.id, 1);
           reload();

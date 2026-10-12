@@ -40,8 +40,20 @@ export type ClipboardAction =
   | "pinLast"
   | "pinMoveTo"
   | "moveToGroup"
+  | "editContent"
   | "editNote"
   | "delete";
+
+/** 独立编辑窗口读取的完整正文（非历史列表摘要）。 */
+export interface EditableClipboardText {
+  text: string;
+  plainTextFromRich: boolean;
+}
+
+export interface SaveEditedClipboardTextResult {
+  id: string;
+  deduplicated: boolean;
+}
 
 export interface ClipboardItem {
   id: string;

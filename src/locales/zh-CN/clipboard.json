@@ -1,4 +1,18 @@
 {
+  "contentEditor": {
+    "cancel": "取消",
+    "copy": "复制修改内容",
+    "empty": "正文不能只有空白",
+    "loadFailed": "无法读取这条记录的完整正文，请检查隐私设置或历史记录。",
+    "menu": "编辑内容…",
+    "paste": "编辑后粘贴",
+    "reset": "恢复原文",
+    "richNotice": "这条记录原为富文本，编辑、复制和另存均按纯文本处理；原记录保持不变。",
+    "saveNew": "另存为新记录",
+    "title": "编辑剪贴板内容",
+    "unchanged": "没有修改内容",
+    "preserved": "原历史记录不会被覆盖"
+  },
   "empty": {
     "categories": {
       "files": "文件",

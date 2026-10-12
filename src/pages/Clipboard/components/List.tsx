@@ -84,7 +84,11 @@ interface ClipboardMenuActionPayload {
  * 剪贴板历史列表：虚拟滚动 + 分类型卡片 + 可视范围分页加载，
  * 跟随关键词（Header 已防抖）检索。
  */
-const List: FC = () => {
+interface ListProps {
+  onEditContent: (id: string) => void;
+}
+
+const List: FC<ListProps> = ({ onEditContent }) => {
   const { t } = useTranslation("clipboard");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [firstVisibleIndex, setFirstVisibleIndex] = useState(0);
@@ -540,6 +544,12 @@ const List: FC = () => {
   >(() => {});
   handleMenuActionRef.current = (payload) => {
     const { action, groupId: targetGroupId, itemId } = payload;
+    // 右侧面板里的条目可能不在当前主列表分页/分组中，编辑入口按 id 读取原文。
+    if (action === "editContent") {
+      closePreview("editContent");
+      onEditContent(itemId);
+      return;
+    }
     const target = findItemById(itemId);
 
     if (!target) return;
