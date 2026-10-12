@@ -488,12 +488,13 @@ pub async fn save_edited_clipboard_text(
     let mut capture = settings.clipboard.capture.clone();
     // 用户主动另存不依赖自动采集开关，文本大小和敏感内容策略仍生效。
     capture.text = true;
+    let exact_content = text.clone();
     let payload = ClipboardPayload::Text(TextPayload {
         text,
         html: None,
         rtf: None,
     });
-    let item = build_item_with_settings(
+    let mut item = build_item_with_settings(
         &store,
         &payload,
         &capture,
@@ -501,11 +502,22 @@ pub async fn save_edited_clipboard_text(
         true,
     )?
     .ok_or_else(|| AppError::Clipboard("edited text exceeds capture/privacy limits".to_owned()))?;
+    apply_exact_edited_text(&mut item, &exact_content);
     let result = persist_and_notify(&app, &pool, &item, None).await?;
     Ok(SaveEditedClipboardTextResult {
         id: result.id,
         deduplicated: result.deduplicated,
     })
+}
+
+/// 手动另存的内容必须与编辑框逐字一致，包括开头缩进和尾部换行。
+/// 普通监听仍保持既有 trim/去重语义；仅对用户主动编辑的新条目应用。
+fn apply_exact_edited_text(item: &mut ClipboardItem, text: &str) {
+    item.content = text.to_owned();
+    item.search_text = Some(text.to_owned());
+    item.summary = Some(text.trim().chars().take(256).collect());
+    item.content_hash = crate::db::items::content_hash(ClipboardKind::Text, text);
+    item.size = Some(text.len() as i64);
 }
 
 /// 播放一次复制成功提示音，用于偏好设置页试听。
@@ -607,7 +619,7 @@ async fn finish_paste(app: &AppHandle, restore_editor_focus: bool) -> Result<()>
         if let Err(err) = window::macos::resign_clipboard_panel_key(app) {
             log::warn!("resign clipboard panel key before paste failed: {err:?}");
         }
-    } else if let Err(err) = window::hide_window(&app, CLIPBOARD_WINDOW_LABEL) {
+    } else if let Err(err) = window::hide_window(app, CLIPBOARD_WINDOW_LABEL) {
         log::warn!("hide clipboard window before paste failed: {err:?}");
     }
 
@@ -2074,6 +2086,18 @@ mod tests {
         assert!(!compute_available_actions(&image_item()).contains(&ClipboardAction::EditContent));
         assert!(validate_edited_text("  \n  ").is_err());
         assert!(validate_edited_text("  你好\n ").is_ok());
+    }
+
+    #[test]
+    fn save_edited_text_retains_indentation_and_trailing_newlines() {
+        let original = "\n  第一行\n第二行  \n";
+        let mut item = text_item(None, false);
+        apply_exact_edited_text(&mut item, original);
+        assert_eq!(item.content, original);
+        assert_eq!(item.search_text.as_deref(), Some(original));
+        assert_eq!(item.content_hash, crate::db::items::content_hash(ClipboardKind::Text, original));
+        assert_eq!(item.size, Some(original.len() as i64));
+        assert_eq!(item.summary.as_deref(), Some("第一行\n第二行"));
     }
 
     #[test]
