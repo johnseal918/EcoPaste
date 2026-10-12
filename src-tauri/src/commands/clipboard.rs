@@ -483,14 +483,14 @@ pub async fn update_edited_clipboard_text(
     }
     if paste_after_save {
         if let Err(error) = write_edited_plain_text(guard.inner().as_ref(), &text) {
-            return Err(AppError::Clipboard(
-                format!("text was saved, but copying for paste failed: {error}"),
-            ));
+            return Err(AppError::Clipboard(format!(
+                "text was saved, but copying for paste failed: {error}"
+            )));
         }
         if let Err(error) = finish_paste(&app, true).await {
-            return Err(AppError::Clipboard(
-                format!("text was saved, but automatic paste failed: {error}"),
-            ));
+            return Err(AppError::Clipboard(format!(
+                "text was saved, but automatic paste failed: {error}"
+            )));
         }
     }
     Ok(())
@@ -570,7 +570,9 @@ fn prepare_edited_clipboard_item(
         .max_text_bytes()
         .is_some_and(|max| text.len() as u64 > max)
     {
-        return Err(AppError::Clipboard("edited text exceeds maximum text size".to_owned()));
+        return Err(AppError::Clipboard(
+            "edited text exceeds maximum text size".to_owned(),
+        ));
     }
     let mut capture = settings.clipboard.capture.clone();
     capture.text = true; // 用户主动保存，不受后台自动采集开关影响。

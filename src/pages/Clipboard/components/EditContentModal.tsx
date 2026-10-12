@@ -1,4 +1,13 @@
-import { Button, Dropdown, type GetRef, Input, type MenuProps, Modal, Spin, Typography } from "antd";
+import {
+  Button,
+  Dropdown,
+  type GetRef,
+  Input,
+  type MenuProps,
+  Modal,
+  Spin,
+  Typography,
+} from "antd";
 import type { FC } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -72,17 +81,31 @@ const EditContentModal: FC<EditContentModalProps> = ({ sourceId, onClose }) => {
     });
   }, [sourceId, loading, loadFailed]);
 
-  const ready = !loading && !loadFailed && busy === null && sourceHash.length > 0;
+  const ready =
+    !loading && !loadFailed && busy === null && sourceHash.length > 0;
   const canOutput = ready && value.trim().length > 0;
   const changed = value !== original;
 
   const handleAction = async (action: EditorAction) => {
-    if (!sourceId || !sourceHash || busy || loading || loadFailed || !value.trim()) return;
+    if (
+      !sourceId ||
+      !sourceHash ||
+      busy ||
+      loading ||
+      loadFailed ||
+      !value.trim()
+    )
+      return;
     setBusy(action);
     try {
       if (action === "save" || action === "savePaste") {
         if (changed) {
-          await updateEditedClipboardText(sourceId, sourceHash, value, action === "savePaste");
+          await updateEditedClipboardText(
+            sourceId,
+            sourceHash,
+            value,
+            action === "savePaste",
+          );
         } else if (action === "savePaste") {
           await pasteEditedClipboardText(sourceId, value);
         }
@@ -106,10 +129,22 @@ const EditContentModal: FC<EditContentModalProps> = ({ sourceId, onClose }) => {
   const moreMenu: MenuProps = {
     items: [
       { disabled: !canOutput, key: "copy", label: t("contentEditor.copy") },
-      { disabled: !canOutput, key: "pasteOnly", label: t("contentEditor.pasteOnce") },
-      { disabled: !canOutput || !changed, key: "saveNew", label: t("contentEditor.saveNew") },
+      {
+        disabled: !canOutput,
+        key: "pasteOnly",
+        label: t("contentEditor.pasteOnce"),
+      },
+      {
+        disabled: !canOutput || !changed,
+        key: "saveNew",
+        label: t("contentEditor.saveNew"),
+      },
       { type: "divider" },
-      { disabled: !ready || !changed, key: "reset", label: t("contentEditor.reset") },
+      {
+        disabled: !ready || !changed,
+        key: "reset",
+        label: t("contentEditor.reset"),
+      },
     ],
     onClick: ({ key }) => {
       if (key === "reset") {

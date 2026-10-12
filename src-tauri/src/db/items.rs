@@ -510,7 +510,9 @@ pub async fn replace_item_text(
     edited: &ClipboardItem,
 ) -> Result<()> {
     if edited.kind != ClipboardKind::Text {
-        return Err(AppError::Clipboard("only text clipboard items can be edited".to_owned()));
+        return Err(AppError::Clipboard(
+            "only text clipboard items can be edited".to_owned(),
+        ));
     }
     let _serial = UPSERT_GATE.lock().await;
     let mut tx = pool.begin().await.context("begin text edit transaction")?;
@@ -1052,17 +1054,25 @@ mod tests {
         edited.content = other.content.clone();
         edited.content_hash = content_hash(ClipboardKind::Text, &edited.content);
         edited.search_text = Some(other.content.clone());
-        assert!(replace_item_text(&pool, "a", &original.content_hash, &edited)
-            .await
-            .is_err());
+        assert!(
+            replace_item_text(&pool, "a", &original.content_hash, &edited)
+                .await
+                .is_err()
+        );
         edited.content = "独立内容".to_owned();
         edited.content_hash = content_hash(ClipboardKind::Text, &edited.content);
         edited.search_text = Some(edited.content.clone());
         assert!(replace_item_text(&pool, "a", "old-version", &edited)
             .await
             .is_err());
-        assert_eq!(find_item_by_id(&pool, "a").await.unwrap().unwrap().content, original.content);
-        assert_eq!(find_item_by_id(&pool, "b").await.unwrap().unwrap().content, other.content);
+        assert_eq!(
+            find_item_by_id(&pool, "a").await.unwrap().unwrap().content,
+            original.content
+        );
+        assert_eq!(
+            find_item_by_id(&pool, "b").await.unwrap().unwrap().content,
+            other.content
+        );
     }
 
     #[tokio::test]
