@@ -1209,7 +1209,9 @@ async fn merge_items(
              ORDER BY is_manually_edited ASC, created_at ASC"
         ),
     );
-    let rows = sqlx::query_as::<_, BackupItemRow>(&select)
+    // This SQL is assembled exclusively from the static SELECT branches
+    // above and two hard-coded column choices; no external values enter SQL.
+    let rows = sqlx::query_as::<_, BackupItemRow>(sqlx::AssertSqlSafe(select.as_str()))
         .fetch_all(backup)
         .await
         .context("failed to read backup items")?;
