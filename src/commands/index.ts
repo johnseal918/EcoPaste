@@ -1035,7 +1035,7 @@ export const updateEditedClipboardText = async (
   await call<void>(
     TAURI_COMMAND.UPDATE_EDITED_CLIPBOARD_TEXT,
     "commands:labels.updateEditedText",
-    { expectedHash, pasteAfterSave, sourceId, text },
+    { input: { expectedHash, pasteAfterSave, sourceId, text } },
   );
   getMessageApi().success(
     i18n.t(
