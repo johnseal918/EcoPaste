@@ -21,6 +21,7 @@ import PermissionControl from "./PermissionControl";
 import RetentionControl, { resolveRetentionValue } from "./RetentionControl";
 import { SegmentedSelectControl, SelectControl } from "./SelectControls";
 import ShortcutRecorderControl from "./ShortcutRecorderControl";
+import SliderControl from "./SliderControl";
 import ShortcutTagsControl from "./ShortcutTagsControl";
 import SortableCheckboxTreeControl from "./SortableCheckboxTreeControl";
 import StatusControl from "./StatusControl";
@@ -129,6 +130,15 @@ const PreferenceSettingControl: FC<PreferenceSettingControlProps> = (props) => {
           onChange={onChange}
           setting={setting}
           value={value}
+        />
+      );
+    case "slider":
+      return (
+        <SliderControl
+          disabled={disabled}
+          onChange={onChange}
+          setting={setting}
+          value={typeof value === "number" ? value : 100}
         />
       );
     case "number":

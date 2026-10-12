@@ -169,6 +169,8 @@ export interface Preview {
   hoverEnabled: boolean;
   hoverDelayMs: PreviewHoverDelayMs;
   spaceEnabled: boolean;
+  /** Panel background opacity, 50–100 in increments of 5. */
+  backgroundOpacity: number;
 }
 
 export interface Feedback {

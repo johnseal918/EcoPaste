@@ -482,6 +482,8 @@ pub struct Preview {
     pub hover_enabled: bool,
     pub hover_delay_ms: PreviewHoverDelayMs,
     pub space_enabled: bool,
+    /// Preview panel background opacity (50..=100 in steps of 5); full opacity by default.
+    pub background_opacity: u8,
 }
 
 impl Default for Preview {
@@ -490,6 +492,7 @@ impl Default for Preview {
             hover_enabled: false,
             hover_delay_ms: PreviewHoverDelayMs::Ms500,
             space_enabled: true,
+            background_opacity: 100,
         }
     }
 }

@@ -1,5 +1,5 @@
 import { useMount } from "ahooks";
-import { Spin } from "antd";
+import { Spin, theme } from "antd";
 import { motion } from "motion/react";
 import { type FC, useRef, useState } from "react";
 import { useSnapshot } from "valtio";
@@ -13,6 +13,10 @@ import { useTauriListen } from "@/hooks/useTauriListen";
 import { settingsState } from "@/stores/settings";
 import { cn } from "@/utils/cn";
 import { log } from "@/utils/log";
+import {
+  normalizePreviewBackgroundOpacity,
+  previewPanelBackgroundColor,
+} from "./background";
 import { cacheKey } from "./cache";
 import { PreviewContent, PreviewHeader } from "./components/PreviewContent";
 import PreviewContentTransition from "./components/PreviewContentTransition";
@@ -65,6 +69,14 @@ const Preview: FC = () => {
   const [payloadResetToken, setPayloadResetToken] = useState(0);
   const panelMeasureRef = useRef<HTMLDivElement>(null);
   const { clipboard } = useSnapshot(settingsState);
+  const { token } = theme.useToken();
+  const opacity = normalizePreviewBackgroundOpacity(
+    clipboard.preview.backgroundOpacity,
+  );
+  const panelBackground = previewPanelBackgroundColor(
+    token.colorBgContainer,
+    opacity,
+  );
   const redactSecrets = clipboard.sensitive.redactSecrets;
   const renderState = usePreviewRenderState(previewState);
   const { loadingItemId, payload } = usePreviewPayload(
@@ -171,9 +183,12 @@ const Preview: FC = () => {
 
       <div
         aria-hidden="true"
-        className="pointer-events-none invisible absolute top-0 left-0 z-0 flex w-fit min-w-72 max-w-120 flex-col overflow-visible rounded-2 border border-ant-border bg-ant-container/95 shadow-lg backdrop-blur"
+        className={cn(
+          "pointer-events-none invisible absolute top-0 left-0 z-0 flex w-fit min-w-72 max-w-120 flex-col overflow-visible rounded-2 border border-ant-border bg-ant-container shadow-lg",
+          { "backdrop-blur": opacity < 100 },
+        )}
         ref={panelMeasureRef}
-        style={panelMeasureStyle}
+        style={{ ...panelMeasureStyle, backgroundColor: panelBackground }}
       >
         <PreviewHeader payload={payload} />
 
@@ -186,9 +201,12 @@ const Preview: FC = () => {
 
       <motion.div
         animate={active ? "open" : "closed"}
-        className="absolute z-5 flex max-h-120 min-w-72 max-w-120 flex-col overflow-hidden rounded-2 border border-ant-border bg-ant-container/95 shadow-lg backdrop-blur"
+        className={cn(
+          "absolute z-5 flex max-h-120 min-w-72 max-w-120 flex-col overflow-hidden rounded-2 border border-ant-border bg-ant-container shadow-lg",
+          { "backdrop-blur": opacity < 100 },
+        )}
         initial="closed"
-        style={motionLayout.panelStyle}
+        style={{ ...motionLayout.panelStyle, backgroundColor: panelBackground }}
         transition={PREVIEW_PANEL_TRANSITION}
         variants={PREVIEW_PANEL_VARIANTS}
       >

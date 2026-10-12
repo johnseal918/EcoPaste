@@ -184,6 +184,12 @@ fn write_atomic(path: &Path, settings: &Settings) -> Result<()> {
 /// 校验设置之间的跨字段约束，避免非法配置写入磁盘。
 fn validate_settings(settings: &Settings) -> Result<()> {
     validate_window_open_group(&settings.clipboard.window.select_group_on_open)?;
+    let opacity = settings.clipboard.preview.background_opacity;
+    if !(50..=100).contains(&opacity) || opacity % 5 != 0 {
+        return Err(AppError::Other(anyhow::anyhow!(
+            "preview background opacity must be 50..=100, in steps of 5"
+        )));
+    }
 
     let open_clipboard = normalize_shortcut_value(&settings.shortcuts.open_clipboard);
     let open_preference = normalize_shortcut_value(&settings.shortcuts.open_preference);
@@ -302,6 +308,32 @@ mod tests {
         settings.shortcuts.open_preference = String::new();
 
         assert!(validate_settings(&settings).is_ok());
+    }
+
+    #[test]
+    fn existing_preview_settings_default_to_opaque_and_roundtrip() {
+        let legacy = r#"{"clipboard":{"preview":{"hoverEnabled":true,"spaceEnabled":false}}}"#;
+        let settings: Settings = serde_json::from_str(legacy).unwrap();
+        assert_eq!(settings.clipboard.preview.background_opacity, 100);
+        assert!(settings.clipboard.preview.hover_enabled);
+        assert!(!settings.clipboard.preview.space_enabled);
+        for opacity in [50, 75, 95, 100] {
+            let mut settings = settings.clone();
+            settings.clipboard.preview.background_opacity = opacity;
+            assert!(validate_settings(&settings).is_ok());
+            let roundtrip: Settings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(roundtrip.clipboard.preview.background_opacity, opacity);
+        }
+    }
+
+    #[test]
+    fn preview_opacity_rejects_out_of_range_and_fractional_steps() {
+        let mut settings = Settings::default();
+        for invalid in [0, 49, 51, 74, 96, 101, 255] {
+            settings.clipboard.preview.background_opacity = invalid;
+            assert!(validate_settings(&settings).is_err(), "invalid opacity: {invalid}");
+        }
     }
 
     #[test]

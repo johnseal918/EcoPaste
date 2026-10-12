@@ -479,6 +479,10 @@
         }
       },
       "preview": {
+        "backgroundOpacity": {
+          "title": "Preview Background Opacity",
+          "description": "100% is fully opaque by default. Adjust 50%–100% in 5% steps; preview text stays solid."
+        },
         "delay": {
           "description": "Set how long to hover before the preview appears.",
           "options": {
