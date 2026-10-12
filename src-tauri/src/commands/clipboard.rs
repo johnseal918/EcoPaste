@@ -2095,7 +2095,10 @@ mod tests {
         apply_exact_edited_text(&mut item, original);
         assert_eq!(item.content, original);
         assert_eq!(item.search_text.as_deref(), Some(original));
-        assert_eq!(item.content_hash, crate::db::items::content_hash(ClipboardKind::Text, original));
+        assert_eq!(
+            item.content_hash,
+            crate::db::items::content_hash(ClipboardKind::Text, original)
+        );
         assert_eq!(item.size, Some(original.len() as i64));
         assert_eq!(item.summary.as_deref(), Some("第一行\n第二行"));
     }
