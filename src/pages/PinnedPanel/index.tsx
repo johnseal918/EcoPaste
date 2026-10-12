@@ -471,7 +471,10 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
         { type: "divider" },
         { key: "unpin", label: t("pinnedPanel.unpin") },
         ...(item.kind === "text"
-          ? [{ type: "divider" as const, key: "editDivider" }, { key: "editContent", label: t("contentEditor.menu") }]
+          ? [
+              { key: "editDivider", type: "divider" as const },
+              { key: "editContent", label: t("contentEditor.menu") },
+            ]
           : []),
       ],
       onClick: async ({ key, domEvent }) => {

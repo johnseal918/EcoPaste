@@ -12,9 +12,9 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::clipboard::{
     add_app_from_path, build_item_with_settings, delete_unreferenced_apps, detect_frontmost,
-    materialize_source, persist_and_notify, refresh_running_apps, sanitize_css_color, AppIconStore,
-    AppsRegistry, ClipboardPayload, ClipboardReader, FileIconStore, ImageStore, TextPayload,
-    WritebackGuard, write_edited_plain_text,
+    materialize_source, persist_and_notify, refresh_running_apps, sanitize_css_color,
+    write_edited_plain_text, AppIconStore, AppsRegistry, ClipboardPayload, ClipboardReader,
+    FileIconStore, ImageStore, TextPayload, WritebackGuard,
 };
 use crate::core::{AppError, Result};
 use crate::db::items::{
@@ -360,16 +360,24 @@ pub struct EditableClipboardText {
     pub plain_text_from_rich: bool,
 }
 
-fn editable_text_from_item(item: &ClipboardItem, redact_secrets: bool) -> Result<EditableClipboardText> {
+fn editable_text_from_item(
+    item: &ClipboardItem,
+    redact_secrets: bool,
+) -> Result<EditableClipboardText> {
     if item.kind != ClipboardKind::Text {
-        return Err(AppError::Clipboard("only text clipboard records can be edited".to_owned()));
+        return Err(AppError::Clipboard(
+            "only text clipboard records can be edited".to_owned(),
+        ));
     }
     if item.is_sensitive && redact_secrets {
         return Err(AppError::Clipboard(
             "this sensitive record is hidden by the redaction setting".to_owned(),
         ));
     }
-    let rich = matches!(item.sub_kind, Some(ClipboardSubKind::Html | ClipboardSubKind::Rtf));
+    let rich = matches!(
+        item.sub_kind,
+        Some(ClipboardSubKind::Html | ClipboardSubKind::Rtf)
+    );
     let content = if rich {
         item.search_text.as_deref().ok_or_else(|| {
             AppError::Clipboard("plain text representation of rich text is unavailable".to_owned())
@@ -385,7 +393,9 @@ fn editable_text_from_item(item: &ClipboardItem, redact_secrets: bool) -> Result
 
 fn validate_edited_text(text: &str) -> Result<()> {
     if text.trim().is_empty() {
-        return Err(AppError::Clipboard("edited text cannot be empty".to_owned()));
+        return Err(AppError::Clipboard(
+            "edited text cannot be empty".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -398,7 +408,12 @@ async fn check_edit_source(
     let item = find_item_by_id(pool, source_id)
         .await?
         .ok_or_else(|| AppError::Clipboard("original clipboard item not found".to_owned()))?;
-    let redact = app.state::<SettingsStore>().snapshot().clipboard.sensitive.redact_secrets;
+    let redact = app
+        .state::<SettingsStore>()
+        .snapshot()
+        .clipboard
+        .sensitive
+        .redact_secrets;
     editable_text_from_item(&item, redact)
 }
 
@@ -410,7 +425,12 @@ pub async fn get_editable_clipboard_text(
     source_id: String,
 ) -> Result<EditableClipboardText> {
     let pool = db.pool().await;
-    check_edit_source(&app, &pool, &source_id).await
+    let editable = check_edit_source(&app, &pool, &source_id).await?;
+    // 编辑弹窗显示前关闭可能来自左右副面板的悬停预览，避免遮挡编辑器。
+    if let Err(error) = window::preview::close_clipboard_preview_now(&app) {
+        log::warn!("hide old preview before text edit failed: {error}");
+    }
+    Ok(editable)
 }
 
 /// 临时复制编辑结果，只写系统剪贴板，不修改原历史。
@@ -584,7 +604,7 @@ async fn finish_paste(app: &AppHandle, restore_editor_focus: bool) -> Result<()>
         // 固定时窗口保持可见：macOS 上 panel 仍是 key window 会吞掉 ⌘V，需先 resign key
         // 让键焦点回到前台 App 的窗口；Windows 剪贴板窗口 focusable=false，无需处理。
         #[cfg(target_os = "macos")]
-        if let Err(err) = window::macos::resign_clipboard_panel_key(&app) {
+        if let Err(err) = window::macos::resign_clipboard_panel_key(app) {
             log::warn!("resign clipboard panel key before paste failed: {err:?}");
         }
     } else if let Err(err) = window::hide_window(&app, CLIPBOARD_WINDOW_LABEL) {
@@ -603,7 +623,7 @@ async fn finish_paste(app: &AppHandle, restore_editor_focus: bool) -> Result<()>
         #[cfg(target_os = "macos")]
         {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            if let Err(err) = window::macos::make_clipboard_panel_key(&app) {
+            if let Err(err) = window::macos::make_clipboard_panel_key(app) {
                 log::warn!("restore clipboard panel key after paste failed: {err:?}");
             }
         }
@@ -2040,14 +2060,17 @@ mod tests {
     #[test]
     fn edited_source_rejects_non_text_missing_plain_and_hidden_secrets() {
         assert!(editable_text_from_item(&image_item(), false).is_err());
-        assert!(editable_text_from_item(&text_item(Some(ClipboardSubKind::Rtf), false), false).is_err());
+        assert!(
+            editable_text_from_item(&text_item(Some(ClipboardSubKind::Rtf), false), false).is_err()
+        );
         assert!(editable_text_from_item(&text_item(None, true), true).is_err());
         assert!(editable_text_from_item(&text_item(None, true), false).is_ok());
     }
 
     #[test]
     fn edit_action_is_text_only_and_whitespace_only_edits_are_rejected() {
-        assert!(compute_available_actions(&text_item(None, false)).contains(&ClipboardAction::EditContent));
+        assert!(compute_available_actions(&text_item(None, false))
+            .contains(&ClipboardAction::EditContent));
         assert!(!compute_available_actions(&image_item()).contains(&ClipboardAction::EditContent));
         assert!(validate_edited_text("  \n  ").is_err());
         assert!(validate_edited_text("  你好\n ").is_ok());

@@ -1034,7 +1034,10 @@ export const getEditableClipboardText = (sourceId: string) =>
   );
 
 /** 只将编辑文字复制到系统剪贴板，绝不覆盖旧历史。 */
-export const copyEditedClipboardText = async (sourceId: string, text: string) => {
+export const copyEditedClipboardText = async (
+  sourceId: string,
+  text: string,
+) => {
   await call<void>(
     TAURI_COMMAND.COPY_EDITED_CLIPBOARD_TEXT,
     "commands:labels.copyEditedText",
@@ -1052,16 +1055,21 @@ export const pasteEditedClipboardText = (sourceId: string, text: string) =>
   );
 
 /** 编辑结果单独入库；已有完全相同内容时尊重原来的去重机制。 */
-export const saveEditedClipboardText = async (sourceId: string, text: string) => {
+export const saveEditedClipboardText = async (
+  sourceId: string,
+  text: string,
+) => {
   const result = await call<SaveEditedClipboardTextResult>(
     TAURI_COMMAND.SAVE_EDITED_CLIPBOARD_TEXT,
     "commands:labels.saveEditedText",
     { sourceId, text },
   );
   getMessageApi().success(
-    i18n.t(result.deduplicated
-      ? "commands:messages.editedTextReused"
-      : "commands:messages.editedTextSaved"),
+    i18n.t(
+      result.deduplicated
+        ? "commands:messages.editedTextReused"
+        : "commands:messages.editedTextSaved",
+    ),
   );
   return result;
 };

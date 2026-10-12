@@ -6,12 +6,12 @@
     "loadFailed": "Cannot load the full text. Check privacy settings or the original item.",
     "menu": "Edit Content…",
     "paste": "Paste Edited Text",
+    "preserved": "The original history item will not be overwritten",
     "reset": "Restore Original",
     "richNotice": "This item was rich text. Edited output is plain text; the original entry stays unchanged.",
     "saveNew": "Save as New Item",
     "title": "Edit Clipboard Content",
-    "unchanged": "No changes yet",
-    "preserved": "The original history item will not be overwritten"
+    "unchanged": "No changes yet"
   },
   "empty": {
     "categories": {

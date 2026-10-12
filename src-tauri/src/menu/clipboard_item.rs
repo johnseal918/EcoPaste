@@ -290,7 +290,7 @@ mod native {
                 ClipboardMenuAction::PinMoveTo,
                 ClipboardMenuAction::MoveToGroup,
                 ClipboardMenuAction::EditContent,
-        ClipboardMenuAction::EditNote,
+                ClipboardMenuAction::EditNote,
                 ClipboardMenuAction::Delete,
             ];
             if id.starts_with(MOVE_GROUP_PREFIX) {

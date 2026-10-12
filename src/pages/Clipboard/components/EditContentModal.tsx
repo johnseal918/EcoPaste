@@ -1,4 +1,4 @@
-import { type GetRef, Button, Input, Modal, Spin, Typography } from "antd";
+import { Button, type GetRef, Input, Modal, Spin, Typography } from "antd";
 import type { FC } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -107,7 +107,11 @@ const EditContentModal: FC<EditContentModalProps> = ({ sourceId, onClose }) => {
       footer={
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap justify-start gap-2">
-            <Button disabled={!ready || value === original} onClick={() => setValue(original)} size="small">
+            <Button
+              disabled={!ready || value === original}
+              onClick={() => setValue(original)}
+              size="small"
+            >
               {t("contentEditor.reset")}
             </Button>
             <Button
@@ -150,16 +154,22 @@ const EditContentModal: FC<EditContentModalProps> = ({ sourceId, onClose }) => {
       width="calc(100vw - 16px)"
     >
       {loading ? (
-        <div className="flex justify-center py-6"><Spin /></div>
+        <div className="flex justify-center py-6">
+          <Spin />
+        </div>
       ) : loadFailed ? (
-        <Typography.Text type="danger">{t("contentEditor.loadFailed")}</Typography.Text>
+        <Typography.Text type="danger">
+          {t("contentEditor.loadFailed")}
+        </Typography.Text>
       ) : (
         <div className="flex flex-col gap-2">
           {fromRich ? (
-            <Typography.Text type="secondary">{t("contentEditor.richNotice")}</Typography.Text>
+            <Typography.Text type="secondary">
+              {t("contentEditor.richNotice")}
+            </Typography.Text>
           ) : null}
           <Input.TextArea
-            autoSize={{ minRows: 5, maxRows: 9 }}
+            autoSize={{ maxRows: 9, minRows: 5 }}
             disabled={busy !== null}
             onChange={(event) => setValue(event.target.value)}
             onKeyDown={(event) => event.stopPropagation()}
@@ -171,7 +181,9 @@ const EditContentModal: FC<EditContentModalProps> = ({ sourceId, onClose }) => {
             {t("contentEditor.preserved")}
           </Typography.Text>
           {value.trim().length === 0 ? (
-            <Typography.Text type="warning">{t("contentEditor.empty")}</Typography.Text>
+            <Typography.Text type="warning">
+              {t("contentEditor.empty")}
+            </Typography.Text>
           ) : null}
         </div>
       )}
