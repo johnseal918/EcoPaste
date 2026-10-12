@@ -185,7 +185,7 @@ fn write_atomic(path: &Path, settings: &Settings) -> Result<()> {
 fn validate_settings(settings: &Settings) -> Result<()> {
     validate_window_open_group(&settings.clipboard.window.select_group_on_open)?;
     let opacity = settings.clipboard.preview.background_opacity;
-    if !(50..=100).contains(&opacity) || opacity % 5 != 0 {
+    if !(50..=100).contains(&opacity) || !opacity.is_multiple_of(5) {
         return Err(AppError::Other(anyhow::anyhow!(
             "preview background opacity must be 50..=100, in steps of 5"
         )));
