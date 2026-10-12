@@ -48,6 +48,7 @@ export type ClipboardAction =
 export interface EditableClipboardText {
   text: string;
   plainTextFromRich: boolean;
+  contentHash: string;
 }
 
 export interface SaveEditedClipboardTextResult {

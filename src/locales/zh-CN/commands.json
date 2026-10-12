@@ -79,7 +79,8 @@
     "suspendGlobalShortcuts": "暂停全局快捷键",
     "toggleFavorite": "收藏",
     "unpinItem": "取消置顶",
-    "updateClipboardOrder": "调整排序"
+    "updateClipboardOrder": "调整排序",
+    "updateEditedText": "保存当前记录"
   },
   "messages": {
     "backupExported": "已导出 {{count}} 条历史记录，备份大小 {{size}}",
@@ -96,6 +97,8 @@
     "editedTextCopied": "修改内容已复制",
     "editedTextReused": "已有相同内容，已复用该记录",
     "editedTextSaved": "修改内容已另存为新记录",
+    "editedTextSavedAndPasted": "已保存并粘贴",
+    "editedTextUpdated": "已保存到当前记录",
     "favoriteAdded": "已收藏",
     "favoriteRemoved": "已取消收藏",
     "imageSaved": "图片已保存",

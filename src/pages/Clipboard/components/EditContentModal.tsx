@@ -1,4 +1,4 @@
-import { Button, type GetRef, Input, Modal, Spin, Typography } from "antd";
+import { Button, Dropdown, type GetRef, Input, type MenuProps, Modal, Spin, Typography } from "antd";
 import type { FC } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -7,6 +7,7 @@ import {
   getEditableClipboardText,
   pasteEditedClipboardText,
   saveEditedClipboardText,
+  updateEditedClipboardText,
 } from "@/commands";
 import { prepareClipboardWindowEditableFocus } from "@/hooks/useClipboardWindowEditableFocus";
 
@@ -16,16 +17,17 @@ interface EditContentModalProps {
 }
 
 type TextAreaRef = GetRef<typeof Input.TextArea>;
-type EditorAction = "copy" | "save" | "paste";
+type EditorAction = "save" | "savePaste" | "copy" | "saveNew" | "pasteOnly";
 
 /**
- * 复用 NoteModal 的交互方式，但始终加载完整正文。
- * 只改临时输出或插入独立记录，不修改原条目的内容/排序/收藏/置顶。
+ * 主操作是保存当前历史、保存并粘贴和取消。
+ * 原有单次粘贴、复制、另存新记录和恢复原文仍可在“更多操作”中使用。
  */
 const EditContentModal: FC<EditContentModalProps> = ({ sourceId, onClose }) => {
   const { t } = useTranslation("clipboard");
   const textAreaRef = useRef<TextAreaRef>(null);
   const [original, setOriginal] = useState("");
+  const [sourceHash, setSourceHash] = useState("");
   const [value, setValue] = useState("");
   const [fromRich, setFromRich] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -36,23 +38,22 @@ const EditContentModal: FC<EditContentModalProps> = ({ sourceId, onClose }) => {
     if (!sourceId) return;
     let current = true;
     setOriginal("");
+    setSourceHash("");
     setValue("");
     setFromRich(false);
     setLoadFailed(false);
     setLoading(true);
     setBusy(null);
-
     const load = async () => {
       try {
-        // Windows 剪贴板浮窗默认不可聚焦；先复用已有输入焦点管理。
         await prepareClipboardWindowEditableFocus();
         const result = await getEditableClipboardText(sourceId);
         if (!current) return;
         setOriginal(result.text);
+        setSourceHash(result.contentHash);
         setValue(result.text);
         setFromRich(result.plainTextFromRich);
       } catch {
-        // 命令层已经输出失败提示；弹窗保留可见的错误状态，不展示摘要当作正文。
         if (current) setLoadFailed(true);
       } finally {
         if (current) setLoading(false);
@@ -71,14 +72,24 @@ const EditContentModal: FC<EditContentModalProps> = ({ sourceId, onClose }) => {
     });
   }, [sourceId, loading, loadFailed]);
 
+  const ready = !loading && !loadFailed && busy === null && sourceHash.length > 0;
+  const canOutput = ready && value.trim().length > 0;
+  const changed = value !== original;
+
   const handleAction = async (action: EditorAction) => {
-    if (!sourceId || busy || loading || loadFailed || !value.trim()) return;
-    if (action === "save" && value === original) return;
+    if (!sourceId || !sourceHash || busy || loading || loadFailed || !value.trim()) return;
     setBusy(action);
     try {
-      if (action === "copy") {
+      if (action === "save" || action === "savePaste") {
+        if (changed) {
+          await updateEditedClipboardText(sourceId, sourceHash, value, action === "savePaste");
+        } else if (action === "savePaste") {
+          await pasteEditedClipboardText(sourceId, value);
+        }
+        onClose();
+      } else if (action === "copy") {
         await copyEditedClipboardText(sourceId, value);
-      } else if (action === "save") {
+      } else if (action === "saveNew") {
         await saveEditedClipboardText(sourceId, value);
         onClose();
       } else {
@@ -86,14 +97,28 @@ const EditContentModal: FC<EditContentModalProps> = ({ sourceId, onClose }) => {
         onClose();
       }
     } catch {
-      // 错误已由 commands 统一提示；保留未保存的编辑内容以便重试。
+      // 已由 commands 统一展示失败原因；保留编辑文本方便再次操作。
     } finally {
       setBusy(null);
     }
   };
 
-  const ready = !loading && !loadFailed && busy === null;
-  const canOutput = ready && value.trim().length > 0;
+  const moreMenu: MenuProps = {
+    items: [
+      { disabled: !canOutput, key: "copy", label: t("contentEditor.copy") },
+      { disabled: !canOutput, key: "pasteOnly", label: t("contentEditor.pasteOnce") },
+      { disabled: !canOutput || !changed, key: "saveNew", label: t("contentEditor.saveNew") },
+      { type: "divider" },
+      { disabled: !ready || !changed, key: "reset", label: t("contentEditor.reset") },
+    ],
+    onClick: ({ key }) => {
+      if (key === "reset") {
+        setValue(original);
+      } else if (key === "copy" || key === "pasteOnly" || key === "saveNew") {
+        void handleAction(key);
+      }
+    },
+  };
 
   return (
     <Modal
@@ -105,42 +130,30 @@ const EditContentModal: FC<EditContentModalProps> = ({ sourceId, onClose }) => {
       closable={busy === null}
       destroyOnHidden
       footer={
-        <div className="flex flex-col gap-2">
-          <div className="flex flex-wrap justify-start gap-2">
-            <Button
-              disabled={!ready || value === original}
-              onClick={() => setValue(original)}
-              size="small"
-            >
-              {t("contentEditor.reset")}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Dropdown disabled={!ready} menu={moreMenu} trigger={["click"]}>
+            <Button size="small" type="text">
+              {t("contentEditor.moreActions")}
             </Button>
-            <Button
-              disabled={!canOutput}
-              loading={busy === "copy"}
-              onClick={() => void handleAction("copy")}
-              size="small"
-            >
-              {t("contentEditor.copy")}
-            </Button>
-          </div>
+          </Dropdown>
           <div className="flex flex-wrap justify-end gap-2">
             <Button disabled={busy !== null} onClick={onClose}>
               {t("contentEditor.cancel")}
             </Button>
             <Button
-              disabled={!canOutput || value === original}
-              loading={busy === "save"}
-              onClick={() => void handleAction("save")}
+              disabled={!canOutput}
+              loading={busy === "savePaste"}
+              onClick={() => void handleAction("savePaste")}
             >
-              {t("contentEditor.saveNew")}
+              {t("contentEditor.saveAndPaste")}
             </Button>
             <Button
               disabled={!canOutput}
-              loading={busy === "paste"}
-              onClick={() => void handleAction("paste")}
+              loading={busy === "save"}
+              onClick={() => void handleAction("save")}
               type="primary"
             >
-              {t("contentEditor.paste")}
+              {t("contentEditor.save")}
             </Button>
           </div>
         </div>

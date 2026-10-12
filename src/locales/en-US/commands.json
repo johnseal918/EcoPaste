@@ -79,7 +79,8 @@
     "suspendGlobalShortcuts": "Suspend global shortcuts",
     "toggleFavorite": "Favorite",
     "unpinItem": "Unpin item",
-    "updateClipboardOrder": "Update order"
+    "updateClipboardOrder": "Update order",
+    "updateEditedText": "Save Current Item"
   },
   "messages": {
     "backupExported": "Exported {{count}} history items, backup size {{size}}",
@@ -96,6 +97,8 @@
     "editedTextCopied": "Edited text copied",
     "editedTextReused": "Matching item already exists and was reused",
     "editedTextSaved": "Edited text saved as a new item",
+    "editedTextSavedAndPasted": "Saved and pasted",
+    "editedTextUpdated": "Changes saved to current history item",
     "favoriteAdded": "Added to favorites",
     "favoriteRemoved": "Removed from favorites",
     "imageSaved": "Image saved",

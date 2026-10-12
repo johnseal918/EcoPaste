@@ -1025,6 +1025,27 @@ export const pasteClipboardItem = (id: string, plain: boolean) => {
   );
 };
 
+/** 保存编辑结果到当前原记录，并可选择保存后自动粘贴。 */
+export const updateEditedClipboardText = async (
+  sourceId: string,
+  expectedHash: string,
+  text: string,
+  pasteAfterSave: boolean,
+) => {
+  await call<void>(
+    TAURI_COMMAND.UPDATE_EDITED_CLIPBOARD_TEXT,
+    "commands:labels.updateEditedText",
+    { expectedHash, pasteAfterSave, sourceId, text },
+  );
+  getMessageApi().success(
+    i18n.t(
+      pasteAfterSave
+        ? "commands:messages.editedTextSavedAndPasted"
+        : "commands:messages.editedTextUpdated",
+    ),
+  );
+};
+
 /** 编辑窗口读取完整正文；HTML/RTF 返回操作系统提供的纯文本表示。 */
 export const getEditableClipboardText = (sourceId: string) =>
   call<EditableClipboardText>(

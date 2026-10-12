@@ -93,6 +93,7 @@ export const TAURI_COMMAND = {
   UPDATE_CLIPBOARD_GROUPS_LAYOUT: "update_clipboard_groups_layout",
   UPDATE_CLIPBOARD_ITEM_GROUP: "update_clipboard_item_group",
   UPDATE_CLIPBOARD_ITEM_NOTE: "update_clipboard_item_note",
+  UPDATE_EDITED_CLIPBOARD_TEXT: "update_edited_clipboard_text",
   UPDATE_SETTINGS: "update_settings",
   WRITE_TO_CLIPBOARD: "write_to_clipboard",
 } as const;

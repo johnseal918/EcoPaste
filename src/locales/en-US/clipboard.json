@@ -1,14 +1,18 @@
 {
   "contentEditor": {
     "cancel": "Cancel",
-    "copy": "Copy Edited Text",
+    "copy": "Copy Without Saving",
     "empty": "Text cannot be blank",
     "loadFailed": "Cannot load the full text. Check privacy settings or the original item.",
     "menu": "Edit Content…",
-    "paste": "Paste Edited Text",
-    "preserved": "The original history item will not be overwritten",
+    "moreActions": "More Actions",
+    "paste": "Paste Once",
+    "pasteOnce": "Paste Once (Do Not Save)",
+    "preserved": "Save updates this history item; favorites, pin, order and notes remain unchanged.",
     "reset": "Restore Original",
-    "richNotice": "This item was rich text. Edited output is plain text; the original entry stays unchanged.",
+    "richNotice": "This was rich text. Saving modifications converts it to plain text; saving without changes preserves its format.",
+    "save": "Save",
+    "saveAndPaste": "Save and Paste",
     "saveNew": "Save as New Item",
     "title": "Edit Clipboard Content",
     "unchanged": "No changes yet"

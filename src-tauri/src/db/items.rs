@@ -6,7 +6,7 @@ use chrono::Utc;
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use tokio::sync::Mutex;
 
-use crate::core::Result;
+use crate::core::{AppError, Result};
 use crate::db::models::{
     ClipboardGroupFilter, ClipboardItem, ClipboardItemQuery, ClipboardItemSort, ClipboardKind,
 };
@@ -501,6 +501,75 @@ async fn write_order_tx(
     Ok(())
 }
 
+/// 原位保存编辑后的文字。只改变内容字段，保留收藏、置顶、排序、分组和备注。
+/// 与监听采集共用 UPSERT_GATE，避免与新内容去重写入竞态；CAS 防止覆盖他人的编辑。
+pub async fn replace_item_text(
+    pool: &SqlitePool,
+    id: &str,
+    expected_hash: &str,
+    edited: &ClipboardItem,
+) -> Result<()> {
+    if edited.kind != ClipboardKind::Text {
+        return Err(AppError::Clipboard("only text clipboard items can be edited".to_owned()));
+    }
+    let _serial = UPSERT_GATE.lock().await;
+    let mut tx = pool.begin().await.context("begin text edit transaction")?;
+
+    let old_hash = sqlx::query_scalar::<_, String>(
+        "SELECT content_hash FROM clipboard_items WHERE id = ? AND kind = 'text'",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await
+    .context("load current clipboard item version")?;
+    if old_hash.as_deref() != Some(expected_hash) {
+        return Err(AppError::Clipboard(
+            "original clipboard text changed or was deleted; reopen the editor".to_owned(),
+        ));
+    }
+
+    // 不合并、删除其他记录。重复内容拒绝原位更新，防止旧版自动去重清理掉保护记录。
+    let duplicate = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM clipboard_items WHERE kind = 'text' AND id <> ? AND search_text = ? LIMIT 1",
+    )
+    .bind(id)
+    .bind(edited.search_text.as_deref().unwrap_or(&edited.content))
+    .fetch_optional(&mut *tx)
+    .await
+    .context("check existing text record before editing")?;
+    if duplicate.is_some() {
+        return Err(AppError::Clipboard(
+            "another history item already has the same text; no record was modified".to_owned(),
+        ));
+    }
+
+    let saved = sqlx::query(
+        "UPDATE clipboard_items SET content = ?, content_hash = ?, search_text = ?, \
+         summary = ?, sub_kind = ?, size = ?, is_sensitive = ?, updated_at = ? \
+         WHERE id = ? AND kind = 'text' AND content_hash = ?",
+    )
+    .bind(&edited.content)
+    .bind(&edited.content_hash)
+    .bind(edited.search_text.as_deref())
+    .bind(edited.summary.as_deref())
+    .bind(edited.sub_kind)
+    .bind(edited.size)
+    .bind(edited.is_sensitive)
+    .bind(Utc::now())
+    .bind(id)
+    .bind(expected_hash)
+    .execute(&mut *tx)
+    .await
+    .context("save original clipboard text")?;
+    if saved.rows_affected() != 1 {
+        return Err(AppError::Clipboard(
+            "clipboard text changed during save; reopen the editor".to_owned(),
+        ));
+    }
+    tx.commit().await.context("commit clipboard text edit")?;
+    Ok(())
+}
+
 /// 更新备注，传 `None` 清空备注。
 pub async fn update_item_note(pool: &SqlitePool, id: &str, note: Option<&str>) -> Result<()> {
     sqlx::query("UPDATE clipboard_items SET note = ? WHERE id = ?")
@@ -921,6 +990,79 @@ mod tests {
 
     fn ids(items: &[ClipboardItem]) -> Vec<&str> {
         items.iter().map(|item| item.id.as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn editing_text_in_place_preserves_metadata_and_updates_fts() {
+        let pool = memory_pool().await;
+        let mut original = sample_item("source");
+        original.content = "<b>旧文本</b>".to_owned();
+        original.content_hash = content_hash(ClipboardKind::Text, &original.content);
+        original.search_text = Some("旧文本".to_owned());
+        original.summary = Some("旧文本".to_owned());
+        original.sub_kind = Some(crate::db::models::ClipboardSubKind::Html);
+        original.is_pinned = true;
+        original.pin_order = Some(1);
+        original.is_favorite = true;
+        original.note = Some("保留备注".to_owned());
+        insert_item(&pool, &original).await.unwrap();
+
+        let mut edited = original.clone();
+        edited.content = "  新的完整文字\n下一行  \n".to_owned();
+        edited.content_hash = content_hash(ClipboardKind::Text, &edited.content);
+        edited.search_text = Some(edited.content.clone());
+        edited.summary = Some("新的完整文字\n下一行".to_owned());
+        edited.sub_kind = None;
+        edited.size = Some(edited.content.len() as i64);
+        replace_item_text(&pool, "source", &original.content_hash, &edited)
+            .await
+            .unwrap();
+        let saved = find_item_by_id(&pool, "source").await.unwrap().unwrap();
+        assert_eq!(saved.id, "source");
+        assert_eq!(saved.content, edited.content);
+        assert_eq!(saved.search_text, edited.search_text);
+        assert_eq!(saved.sub_kind, None);
+        assert_eq!(saved.pin_order, Some(1));
+        assert!(saved.is_pinned);
+        assert!(saved.is_favorite);
+        assert_eq!(saved.note.as_deref(), Some("保留备注"));
+        assert_eq!(saved.created_at, original.created_at);
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM clipboard_items")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        let match_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM clipboard_items_fts WHERE clipboard_items_fts MATCH '新的完整文字'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(match_count, 1);
+    }
+
+    #[tokio::test]
+    async fn editing_text_conflict_or_duplicate_never_mutates_history() {
+        let pool = memory_pool().await;
+        let original = sample_item("a");
+        let other = sample_item("b");
+        insert_item(&pool, &original).await.unwrap();
+        insert_item(&pool, &other).await.unwrap();
+        let mut edited = original.clone();
+        edited.content = other.content.clone();
+        edited.content_hash = content_hash(ClipboardKind::Text, &edited.content);
+        edited.search_text = Some(other.content.clone());
+        assert!(replace_item_text(&pool, "a", &original.content_hash, &edited)
+            .await
+            .is_err());
+        edited.content = "独立内容".to_owned();
+        edited.content_hash = content_hash(ClipboardKind::Text, &edited.content);
+        edited.search_text = Some(edited.content.clone());
+        assert!(replace_item_text(&pool, "a", "old-version", &edited)
+            .await
+            .is_err());
+        assert_eq!(find_item_by_id(&pool, "a").await.unwrap().unwrap().content, original.content);
+        assert_eq!(find_item_by_id(&pool, "b").await.unwrap().unwrap().content, other.content);
     }
 
     #[tokio::test]

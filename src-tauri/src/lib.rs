@@ -114,6 +114,7 @@ pub fn run() {
             commands::delete_unreferenced_clipboard_apps,
             commands::get_clipboard_preview_payload,
             commands::get_editable_clipboard_text,
+            commands::update_edited_clipboard_text,
             commands::copy_edited_clipboard_text,
             commands::paste_edited_clipboard_text,
             commands::save_edited_clipboard_text,

@@ -358,6 +358,8 @@ pub async fn get_clipboard_preview_payload(
 pub struct EditableClipboardText {
     pub text: String,
     pub plain_text_from_rich: bool,
+    /// 用于保存前 CAS 校验；其它地方改变内容时禁止静默覆盖。
+    pub content_hash: String,
 }
 
 fn editable_text_from_item(
@@ -388,6 +390,7 @@ fn editable_text_from_item(
     Ok(EditableClipboardText {
         text: content.to_owned(),
         plain_text_from_rich: rich,
+        content_hash: item.content_hash.clone(),
     })
 }
 
@@ -431,6 +434,66 @@ pub async fn get_editable_clipboard_text(
         log::warn!("hide old preview before text edit failed: {error}");
     }
     Ok(editable)
+}
+
+/// 更新原历史内容（不新建记录），可选择保存后立即粘贴。
+/// 版本冲突和重复内容会拒绝保存，绝不覆盖其他历史条目。
+#[tauri::command]
+pub async fn update_edited_clipboard_text(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    store: State<'_, ImageStore>,
+    guard: State<'_, Arc<WritebackGuard>>,
+    source_id: String,
+    expected_hash: String,
+    text: String,
+    paste_after_save: bool,
+) -> Result<()> {
+    validate_edited_text(&text)?;
+    let pool = db.pool().await;
+    let original = find_item_by_id(&pool, &source_id)
+        .await?
+        .ok_or_else(|| AppError::Clipboard("original clipboard item not found".to_owned()))?;
+    let redact = app
+        .state::<SettingsStore>()
+        .snapshot()
+        .clipboard
+        .sensitive
+        .redact_secrets;
+    let editable = editable_text_from_item(&original, redact)?;
+    if original.content_hash != expected_hash {
+        return Err(AppError::Clipboard(
+            "original clipboard text changed; reopen the editor before saving".to_owned(),
+        ));
+    }
+    // 未修改的内容执行普通保存时直接成功；富文本也不会因此被转换为纯文本。
+    if text != editable.text {
+        let updated = prepare_edited_clipboard_item(&app, &store, &text)?;
+        crate::db::items::replace_item_text(&pool, &source_id, &expected_hash, &updated).await?;
+        if let Err(error) = app.emit(
+            CLIPBOARD_UPDATED_EVENT,
+            serde_json::json!({
+                "id": source_id,
+                "kind": ClipboardKind::Text,
+                "metadata": true
+            }),
+        ) {
+            log::warn!("notify text edit result failed: {error}");
+        }
+    }
+    if paste_after_save {
+        if let Err(error) = write_edited_plain_text(guard.inner().as_ref(), &text) {
+            return Err(AppError::Clipboard(
+                format!("text was saved, but copying for paste failed: {error}"),
+            ));
+        }
+        if let Err(error) = finish_paste(&app, true).await {
+            return Err(AppError::Clipboard(
+                format!("text was saved, but automatic paste failed: {error}"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// 临时复制编辑结果，只写系统剪贴板，不修改原历史。
@@ -484,30 +547,48 @@ pub async fn save_edited_clipboard_text(
     let pool = db.pool().await;
     check_edit_source(&app, &pool, &source_id).await?;
 
+    let item = prepare_edited_clipboard_item(&app, &store, &text)?;
+    let result = persist_and_notify(&app, &pool, &item, None).await?;
+    Ok(SaveEditedClipboardTextResult {
+        id: result.id,
+        deduplicated: result.deduplicated,
+    })
+}
+
+/// 原位编辑和另存新记录共用同一个文本验证/草稿入口，避免数据语义不一致。
+fn prepare_edited_clipboard_item(
+    app: &AppHandle,
+    store: &ImageStore,
+    text: &str,
+) -> Result<ClipboardItem> {
+    validate_edited_text(text)?;
     let settings = app.state::<SettingsStore>().snapshot();
+    // 校验完整输入长度，不以 trim 后长度替代（保留用户缩进/换行）。
+    if settings
+        .clipboard
+        .capture
+        .max_text_bytes()
+        .is_some_and(|max| text.len() as u64 > max)
+    {
+        return Err(AppError::Clipboard("edited text exceeds maximum text size".to_owned()));
+    }
     let mut capture = settings.clipboard.capture.clone();
-    // 用户主动另存不依赖自动采集开关，文本大小和敏感内容策略仍生效。
-    capture.text = true;
-    let exact_content = text.clone();
+    capture.text = true; // 用户主动保存，不受后台自动采集开关影响。
     let payload = ClipboardPayload::Text(TextPayload {
-        text,
+        text: text.to_owned(),
         html: None,
         rtf: None,
     });
     let mut item = build_item_with_settings(
-        &store,
+        store,
         &payload,
         &capture,
         &settings.clipboard.sensitive,
         true,
     )?
     .ok_or_else(|| AppError::Clipboard("edited text exceeds capture/privacy limits".to_owned()))?;
-    apply_exact_edited_text(&mut item, &exact_content);
-    let result = persist_and_notify(&app, &pool, &item, None).await?;
-    Ok(SaveEditedClipboardTextResult {
-        id: result.id,
-        deduplicated: result.deduplicated,
-    })
+    apply_exact_edited_text(&mut item, text);
+    Ok(item)
 }
 
 /// 手动另存的内容必须与编辑框逐字一致，包括开头缩进和尾部换行。
