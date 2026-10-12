@@ -332,7 +332,10 @@ mod tests {
         let mut settings = Settings::default();
         for invalid in [0, 49, 51, 74, 96, 101, 255] {
             settings.clipboard.preview.background_opacity = invalid;
-            assert!(validate_settings(&settings).is_err(), "invalid opacity: {invalid}");
+            assert!(
+                validate_settings(&settings).is_err(),
+                "invalid opacity: {invalid}"
+            );
         }
     }
 

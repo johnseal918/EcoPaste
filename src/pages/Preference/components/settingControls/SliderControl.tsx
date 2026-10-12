@@ -27,8 +27,7 @@ const SliderControl: FC<SliderControlProps> = (props) => {
   if (!control) return null;
 
   const midpoint =
-    Math.round((control.min + control.max) / (2 * control.step)) *
-    control.step;
+    Math.round((control.min + control.max) / (2 * control.step)) * control.step;
   const marks = {
     [control.min]: `${control.min}%`,
     [midpoint]: `${midpoint}%`,
