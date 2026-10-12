@@ -1,0 +1,71 @@
+name: EcoPaste Preview Cache Refresh Windows Validation
+
+"on":
+  push:
+    branches:
+      - validation/2026-10-12-preview-cache-refresh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-cache-refresh-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    name: Verify Preview Cache and Build Windows EXE
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Format changed preview files
+        run: >-
+          pnpm exec biome check --write
+          src/pages/Preview/cache.ts
+          src/pages/Preview/hooks.ts
+          src/pages/Preview/cache.test.ts
+      - name: Upload formatter output
+        uses: actions/upload-artifact@v4
+        with:
+          name: EcoPaste-PreviewCache-FormattedSource
+          path: |
+            src/pages/Preview/cache.ts
+            src/pages/Preview/hooks.ts
+            src/pages/Preview/cache.test.ts
+          if-no-files-found: error
+      - name: Preview cache regression tests
+        run: pnpm exec tsx --test src/pages/Preview/cache.test.ts
+      - name: Frontend lint and types
+        run: pnpm lint && pnpm tsc
+      - name: Generate Tauri icons
+        run: pnpm build:icon
+        env:
+          PLATFORM: windows-latest
+      - name: Build frontend
+        run: pnpm build
+      - name: Build Windows EXE
+        run: pnpm tauri build --no-bundle --target x86_64-pc-windows-msvc
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: EcoPaste-Windows-x64-PreviewCacheFixed
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/EcoPaste.exe
+          if-no-files-found: error
