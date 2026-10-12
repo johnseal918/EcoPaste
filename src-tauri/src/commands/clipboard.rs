@@ -438,17 +438,29 @@ pub async fn get_editable_clipboard_text(
 
 /// 更新原历史内容（不新建记录），可选择保存后立即粘贴。
 /// 版本冲突和重复内容会拒绝保存，绝不覆盖其他历史条目。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateEditedClipboardInput {
+    pub source_id: String,
+    pub expected_hash: String,
+    pub text: String,
+    pub paste_after_save: bool,
+}
+
 #[tauri::command]
 pub async fn update_edited_clipboard_text(
     app: AppHandle,
     db: State<'_, DatabaseState>,
     store: State<'_, ImageStore>,
     guard: State<'_, Arc<WritebackGuard>>,
-    source_id: String,
-    expected_hash: String,
-    text: String,
-    paste_after_save: bool,
+    input: UpdateEditedClipboardInput,
 ) -> Result<()> {
+    let UpdateEditedClipboardInput {
+        source_id,
+        expected_hash,
+        text,
+        paste_after_save,
+    } = input;
     validate_edited_text(&text)?;
     let pool = db.pool().await;
     let original = find_item_by_id(&pool, &source_id)
@@ -483,14 +495,14 @@ pub async fn update_edited_clipboard_text(
     }
     if paste_after_save {
         if let Err(error) = write_edited_plain_text(guard.inner().as_ref(), &text) {
-            return Err(AppError::Clipboard(
-                format!("text was saved, but copying for paste failed: {error}"),
-            ));
+            return Err(AppError::Clipboard(format!(
+                "text was saved, but copying for paste failed: {error}"
+            )));
         }
         if let Err(error) = finish_paste(&app, true).await {
-            return Err(AppError::Clipboard(
-                format!("text was saved, but automatic paste failed: {error}"),
-            ));
+            return Err(AppError::Clipboard(format!(
+                "text was saved, but automatic paste failed: {error}"
+            )));
         }
     }
     Ok(())
@@ -570,7 +582,9 @@ fn prepare_edited_clipboard_item(
         .max_text_bytes()
         .is_some_and(|max| text.len() as u64 > max)
     {
-        return Err(AppError::Clipboard("edited text exceeds maximum text size".to_owned()));
+        return Err(AppError::Clipboard(
+            "edited text exceeds maximum text size".to_owned(),
+        ));
     }
     let mut capture = settings.clipboard.capture.clone();
     capture.text = true; // 用户主动保存，不受后台自动采集开关影响。
