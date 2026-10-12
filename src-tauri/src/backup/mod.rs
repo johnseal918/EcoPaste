@@ -1172,6 +1172,7 @@ async fn merge_items(
 ) -> Result<MergeOutcome> {
     let has_priority_order = backup_has_column(backup, "priority_order").await?;
     let has_pin_order = backup_has_column(backup, "pin_order").await?;
+    let has_manual_edit = backup_has_column(backup, "is_manually_edited").await?;
     let select: &'static str = match (has_priority_order, has_pin_order) {
         (true, true) => {
             "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
@@ -1194,7 +1195,21 @@ async fn merge_items(
              created_at, updated_at FROM clipboard_items ORDER BY created_at ASC"
         }
     };
-    let rows = sqlx::query_as::<_, BackupItemRow>(select)
+    // Older backup DBs have no manually-edited flag. Import ordinary rows first,
+    // then intentional duplicates, preserving both records and their identities.
+    let manual_edit_select = if has_manual_edit {
+        "is_manually_edited"
+    } else {
+        "0 AS is_manually_edited"
+    };
+    let select = select.replace(
+        "created_at, updated_at FROM clipboard_items ORDER BY created_at ASC",
+        &format!(
+            "created_at, updated_at, {manual_edit_select} FROM clipboard_items \
+             ORDER BY is_manually_edited ASC, created_at ASC"
+        ),
+    );
+    let rows = sqlx::query_as::<_, BackupItemRow>(&select)
         .fetch_all(backup)
         .await
         .context("failed to read backup items")?;
@@ -1216,14 +1231,27 @@ async fn merge_items(
     let mut legacy_pin_sequence = 0_i64;
 
     for row in rows {
-        let exists: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 FROM clipboard_items WHERE kind = ? AND content_hash = ? LIMIT 1",
-        )
-        .bind(row.kind.as_str())
-        .bind(row.content_hash.as_str())
-        .fetch_optional(&mut **tx)
-        .await
-        .context("failed to check duplicate item")?;
+        // For explicit user-edited copies, only identical ID is a duplicate.
+        // Auto-captured history keeps its existing content-hash dedup behavior,
+        // except that a distinct manually-edited row is not treated as a duplicate.
+        let exists: Option<i64> = if row.is_manually_edited {
+            sqlx::query_scalar("SELECT 1 FROM clipboard_items WHERE id = ? LIMIT 1")
+                .bind(&row.id)
+                .fetch_optional(&mut **tx)
+                .await
+                .context("failed to check manually edited item id")?
+        } else {
+            sqlx::query_scalar(
+                "SELECT 1 FROM clipboard_items WHERE id = ? OR \
+                 (kind = ? AND content_hash = ? AND is_manually_edited = 0) LIMIT 1",
+            )
+            .bind(&row.id)
+            .bind(&row.kind)
+            .bind(&row.content_hash)
+            .fetch_optional(&mut **tx)
+            .await
+            .context("failed to check ordinary imported item duplicate")?
+        };
         if exists.is_some() {
             skipped_items += 1;
             continue;
@@ -1241,8 +1269,8 @@ async fn merge_items(
             "INSERT OR IGNORE INTO clipboard_items \
              (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
               summary, file_types, size, width, height, use_count, is_favorite, is_pinned, priority_order, pin_order, is_sensitive, platform, note, \
-              created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              created_at, updated_at, is_manually_edited) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(row.id)
         .bind(row.kind)
@@ -1267,6 +1295,7 @@ async fn merge_items(
         .bind(row.note)
         .bind(row.created_at)
         .bind(row.updated_at)
+        .bind(row.is_manually_edited)
         .execute(&mut **tx)
         .await
         .context("failed to import item")?;
@@ -1304,6 +1333,7 @@ struct BackupItemRow {
     note: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    is_manually_edited: bool,
 }
 
 async fn backup_has_column(pool: &SqlitePool, column: &str) -> Result<bool> {
@@ -1623,6 +1653,86 @@ mod tests {
                 "manifest.json",
                 "resources/clipboard-images/origin/demo.png",
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn merging_backup_preserves_intentional_duplicate_and_original_ids() {
+        use crate::db::items::{content_hash, insert_item};
+        use crate::db::models::{ClipboardItem, ClipboardKind, Platform};
+        use crate::db::test_support::memory_pool;
+        use chrono::DateTime;
+
+        let backup = memory_pool().await;
+        let current = memory_pool().await;
+        let ts = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let content = "用户刻意保留的相同文字记录".to_owned();
+        let original = ClipboardItem {
+            id: "ordinary-copy".to_owned(),
+            kind: ClipboardKind::Text,
+            sub_kind: None,
+            group_id: None,
+            source_app_id: None,
+            content_hash: content_hash(ClipboardKind::Text, &content),
+            content: content.clone(),
+            search_text: Some(content.clone()),
+            summary: Some(content.clone()),
+            file_types: None,
+            size: Some(content.len() as i64),
+            width: None,
+            height: None,
+            use_count: 1,
+            is_favorite: false,
+            is_pinned: false,
+            priority_order: None,
+            pin_order: None,
+            is_sensitive: false,
+            platform: Platform::Windows,
+            note: None,
+            created_at: ts,
+            updated_at: ts,
+            source_app_name: None,
+            source_app_icon_file: None,
+            source_app_icon_path: None,
+            image_thumbnail_path: None,
+            file_entries: None,
+            files_preview_kind: None,
+            available_actions: Vec::new(),
+            color_preview: None,
+            display_created_at: String::new(),
+        };
+        let mut manual = original.clone();
+        manual.id = "edited-by-user".to_owned();
+        insert_item(&backup, &original).await.unwrap();
+        insert_item(&backup, &manual).await.unwrap();
+        sqlx::query("UPDATE clipboard_items SET is_manually_edited = 1 WHERE id = ?")
+            .bind(&manual.id)
+            .execute(&backup)
+            .await
+            .unwrap();
+
+        let result = merge_history(&current, &backup).await.unwrap();
+        assert_eq!(result.imported_items, 2);
+        assert_eq!(result.skipped_items, 0);
+        for (id, expected_manual) in [
+            (&original.id, false),
+            (&manual.id, true),
+        ] {
+            let (actual_text, flag): (String, bool) = sqlx::query_as(
+                "SELECT content, is_manually_edited FROM clipboard_items WHERE id = ?",
+            )
+            .bind(id)
+            .fetch_one(&current)
+            .await
+            .unwrap();
+            assert_eq!(actual_text, content);
+            assert_eq!(flag, expected_manual);
+        }
+        assert_eq!(
+            crate::db::items::consolidate_safe_text_duplicates(&current)
+                .await
+                .unwrap(),
+            0
         );
     }
 

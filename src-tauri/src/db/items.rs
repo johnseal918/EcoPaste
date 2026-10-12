@@ -130,7 +130,7 @@ pub async fn consolidate_safe_text_duplicates(pool: &SqlitePool) -> Result<u64> 
          WHERE kind = 'text' AND search_text IS NOT NULL AND search_text <> '' \
            AND is_favorite = 0 AND is_pinned = 0 \
            AND priority_order IS NULL AND pin_order IS NULL \
-           AND note IS NULL AND is_sensitive = 0 \
+           AND note IS NULL AND is_sensitive = 0 AND is_manually_edited = 0 \
          ORDER BY search_text ASC, group_id ASC, updated_at DESC, created_at DESC, id ASC",
     )
     .fetch_all(&mut *tx)
@@ -530,24 +530,12 @@ pub async fn replace_item_text(
         ));
     }
 
-    // 不合并、删除其他记录。重复内容拒绝原位更新，防止旧版自动去重清理掉保护记录。
-    let duplicate = sqlx::query_scalar::<_, String>(
-        "SELECT id FROM clipboard_items WHERE kind = 'text' AND id <> ? AND search_text = ? LIMIT 1",
-    )
-    .bind(id)
-    .bind(edited.search_text.as_deref().unwrap_or(&edited.content))
-    .fetch_optional(&mut *tx)
-    .await
-    .context("check existing text record before editing")?;
-    if duplicate.is_some() {
-        return Err(AppError::Clipboard(
-            "another history item already has the same text; no record was modified".to_owned(),
-        ));
-    }
+    // 用户主动保存允许内容与其他记录相同，不合并/删除任何行。
+    // 被手动编辑的 ID 会明确标记，避免应用重启后的旧记录整理误删它。
 
     let saved = sqlx::query(
         "UPDATE clipboard_items SET content = ?, content_hash = ?, search_text = ?, \
-         summary = ?, sub_kind = ?, size = ?, is_sensitive = ?, updated_at = ? \
+         summary = ?, sub_kind = ?, size = ?, is_sensitive = ?, is_manually_edited = 1, updated_at = ? \
          WHERE id = ? AND kind = 'text' AND content_hash = ?",
     )
     .bind(&edited.content)
@@ -1044,36 +1032,111 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn editing_text_conflict_or_duplicate_never_mutates_history() {
+    async fn manual_edit_may_match_existing_text_without_losing_any_row_on_restart() {
+        let pool = memory_pool().await;
+        let mut first = sample_item("first");
+        let mut other = sample_item("other");
+        first.search_text = Some(first.content.clone());
+        other.search_text = Some(other.content.clone());
+        first.is_favorite = true;
+        first.is_pinned = true;
+        first.pin_order = Some(1);
+        first.note = Some("keep my note".to_owned());
+        insert_item(&pool, &first).await.unwrap();
+        insert_item(&pool, &other).await.unwrap();
+
+        let mut edited = first.clone();
+        edited.content = other.content.clone();
+        edited.search_text = Some(other.content.clone());
+        edited.content_hash = content_hash(ClipboardKind::Text, &edited.content);
+        edited.summary = Some(edited.content.clone());
+        replace_item_text(&pool, "first", &first.content_hash, &edited)
+            .await
+            .unwrap();
+
+        let actual = find_item_by_id(&pool, "first").await.unwrap().unwrap();
+        let untouched = find_item_by_id(&pool, "other").await.unwrap().unwrap();
+        assert_eq!(actual.content, other.content);
+        assert_eq!(actual.id, first.id);
+        assert_eq!(untouched.id, other.id);
+        assert_eq!(untouched.content, other.content);
+        assert!(actual.is_favorite);
+        assert!(actual.is_pinned);
+        assert_eq!(actual.pin_order, Some(1));
+        assert_eq!(actual.note.as_deref(), Some("keep my note"));
+        let manual_flag: bool = sqlx::query_scalar(
+            "SELECT is_manually_edited FROM clipboard_items WHERE id = ?",
+        )
+        .bind("first")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(manual_flag);
+
+        // 模拟数据库启动时的原有安全去重：人工编辑的记录必须保留。
+        let removed = consolidate_safe_text_duplicates(&pool).await.unwrap();
+        assert_eq!(removed, 0);
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM clipboard_items")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+
+        // 常规复制仍按原有哈希和可见文字去重，不能新增第三张卡片。
+        let mut capture = sample_item("new-auto-copy");
+        capture.content = other.content.clone();
+        capture.content_hash = content_hash(ClipboardKind::Text, &capture.content);
+        capture.search_text = Some(other.content.clone());
+        assert!(upsert_item(&pool, &capture).await.unwrap().deduplicated);
+        let after: i64 = sqlx::query_scalar("SELECT count(*) FROM clipboard_items")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(after, 2);
+    }
+
+    #[tokio::test]
+    async fn unprotected_manual_duplicate_also_survives_startup_reconciliation() {
+        let pool = memory_pool().await;
+        let mut first = sample_item("original");
+        let mut second = sample_item("edited");
+        first.search_text = Some(first.content.clone());
+        second.search_text = Some(second.content.clone());
+        insert_item(&pool, &first).await.unwrap();
+        insert_item(&pool, &second).await.unwrap();
+        second.content = first.content.clone();
+        second.search_text = Some(first.content.clone());
+        second.content_hash = first.content_hash.clone();
+        second.summary = Some(second.content.clone());
+        replace_item_text(
+            &pool,
+            "edited",
+            &content_hash(ClipboardKind::Text, "content-edited"),
+            &second,
+        )
+        .await
+        .unwrap();
+        assert_eq!(consolidate_safe_text_duplicates(&pool).await.unwrap(), 0);
+        for id in ["original", "edited"] {
+            assert!(find_item_by_id(&pool, id).await.unwrap().is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn optimistic_edit_conflict_still_refuses_to_overwrite() {
         let pool = memory_pool().await;
         let original = sample_item("a");
-        let mut other = sample_item("b");
-        other.search_text = Some(other.content.clone());
         insert_item(&pool, &original).await.unwrap();
-        insert_item(&pool, &other).await.unwrap();
         let mut edited = original.clone();
-        edited.content = other.content.clone();
-        edited.content_hash = content_hash(ClipboardKind::Text, &edited.content);
-        edited.search_text = Some(other.content.clone());
-        assert!(
-            replace_item_text(&pool, "a", &original.content_hash, &edited)
-                .await
-                .is_err()
-        );
-        edited.content = "独立内容".to_owned();
+        edited.content = "changed".to_owned();
         edited.content_hash = content_hash(ClipboardKind::Text, &edited.content);
         edited.search_text = Some(edited.content.clone());
-        assert!(replace_item_text(&pool, "a", "old-version", &edited)
+        assert!(replace_item_text(&pool, "a", "stale-hash", &edited)
             .await
             .is_err());
-        assert_eq!(
-            find_item_by_id(&pool, "a").await.unwrap().unwrap().content,
-            original.content
-        );
-        assert_eq!(
-            find_item_by_id(&pool, "b").await.unwrap().unwrap().content,
-            other.content
-        );
+        let current = find_item_by_id(&pool, "a").await.unwrap().unwrap();
+        assert_eq!(current.content, original.content);
+        assert_eq!(current.content_hash, original.content_hash);
     }
 
     #[tokio::test]
