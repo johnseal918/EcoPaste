@@ -100,6 +100,7 @@ export function usePreviewPayload(
     setPayload(null);
   }, [resetToken]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: invalidationSerial 用于后台剪贴板更新事件主动触发再次拉取，即使不在 effect 内读取。
   useEffect(() => {
     if (!previewState) {
       // 保留退出动画的最后一帧，但不保留可供下次打开直接命中的旧内容缓存。
