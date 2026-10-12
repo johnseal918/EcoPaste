@@ -1047,7 +1047,8 @@ mod tests {
     async fn editing_text_conflict_or_duplicate_never_mutates_history() {
         let pool = memory_pool().await;
         let original = sample_item("a");
-        let other = sample_item("b");
+        let mut other = sample_item("b");
+        other.search_text = Some(other.content.clone());
         insert_item(&pool, &original).await.unwrap();
         insert_item(&pool, &other).await.unwrap();
         let mut edited = original.clone();
