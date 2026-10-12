@@ -1064,13 +1064,12 @@ mod tests {
         assert!(actual.is_pinned);
         assert_eq!(actual.pin_order, Some(1));
         assert_eq!(actual.note.as_deref(), Some("keep my note"));
-        let manual_flag: bool = sqlx::query_scalar(
-            "SELECT is_manually_edited FROM clipboard_items WHERE id = ?",
-        )
-        .bind("first")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let manual_flag: bool =
+            sqlx::query_scalar("SELECT is_manually_edited FROM clipboard_items WHERE id = ?")
+                .bind("first")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!(manual_flag);
 
         // 模拟数据库启动时的原有安全去重：人工编辑的记录必须保留。

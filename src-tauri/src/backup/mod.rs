@@ -1714,10 +1714,7 @@ mod tests {
         let result = merge_history(&current, &backup).await.unwrap();
         assert_eq!(result.imported_items, 2);
         assert_eq!(result.skipped_items, 0);
-        for (id, expected_manual) in [
-            (&original.id, false),
-            (&manual.id, true),
-        ] {
+        for (id, expected_manual) in [(&original.id, false), (&manual.id, true)] {
             let (actual_text, flag): (String, bool) = sqlx::query_as(
                 "SELECT content, is_manually_edited FROM clipboard_items WHERE id = ?",
             )
