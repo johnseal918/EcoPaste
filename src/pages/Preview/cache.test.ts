@@ -19,8 +19,16 @@ function preview(id: string, text: string, updatedAt: string) {
 
 test("editing one item evicts all its cached versions but preserves other cards", () => {
   const cache = new Map<string, ClipboardPreviewPayload>();
-  writeCachedPayload(cache, preview("edited", "before", "2026-10-12T01:00:00Z"), false);
-  writeCachedPayload(cache, preview("other", "independent", "2026-10-12T01:00:00Z"), false);
+  writeCachedPayload(
+    cache,
+    preview("edited", "before", "2026-10-12T01:00:00Z"),
+    false,
+  );
+  writeCachedPayload(
+    cache,
+    preview("other", "independent", "2026-10-12T01:00:00Z"),
+    false,
+  );
   assert.equal(readCachedPayload(cache, "edited", false)?.text, "before");
   invalidateCachedPayload(cache, "edited");
   assert.equal(readCachedPayload(cache, "edited", false), null);
@@ -42,7 +50,10 @@ test("closing and reopening the preview starts with a fresh cache", () => {
   assert.equal(beginPreviewCacheSession(cache, 17, 18), 18);
   assert.equal(readCachedPayload(cache, "same-id", false), null);
   writeCachedPayload(cache, updated, false);
-  assert.equal(readCachedPayload(cache, "same-id", false)?.text, "saved content");
+  assert.equal(
+    readCachedPayload(cache, "same-id", false)?.text,
+    "saved content",
+  );
 });
 
 test("replacing the cached revision never falls back to older content", () => {
