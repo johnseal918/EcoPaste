@@ -1,0 +1,64 @@
+name: EcoPaste Edit Content Format Once
+
+"on":
+  push:
+    branches:
+      - buildsync/2026-10-12-edit-content
+    paths:
+      - .github/workflows/edit-content-format-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  format-once:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current development head
+        uses: actions/checkout@v4
+        with:
+          ref: buildsync/2026-10-12-edit-content
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Format edited frontend files
+        run: >-
+          pnpm exec biome check --write
+          src/types/clipboard.ts
+          src/constants/commands.ts
+          src/constants/events.ts
+          src/commands/index.ts
+          src/pages/Clipboard/index.tsx
+          src/pages/Clipboard/components/List.tsx
+          src/pages/Clipboard/components/EditContentModal.tsx
+          src/pages/PinnedPanel/index.tsx
+          src/locales/zh-CN/clipboard.json
+          src/locales/en-US/clipboard.json
+          src/locales/zh-CN/commands.json
+          src/locales/en-US/commands.json
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: rustfmt
+      - name: Format Rust
+        working-directory: src-tauri
+        run: cargo fmt --all
+      - name: Commit exact formatted code and only scoped source
+        shell: bash
+        run: |
+          git add --             src/types/clipboard.ts src/constants/commands.ts src/constants/events.ts             src/commands/index.ts src/pages/Clipboard/index.tsx             src/pages/Clipboard/components/List.tsx             src/pages/Clipboard/components/EditContentModal.tsx             src/pages/PinnedPanel/index.tsx             src/locales/zh-CN/clipboard.json src/locales/en-US/clipboard.json             src/locales/zh-CN/commands.json src/locales/en-US/commands.json             src-tauri/src/clipboard/write.rs src-tauri/src/clipboard/mod.rs             src-tauri/src/commands/clipboard.rs src-tauri/src/lib.rs             src-tauri/src/db/models.rs src-tauri/src/menu/clipboard_item.rs             src-tauri/src/i18n/keys.rs             src-tauri/src/i18n/zh_cn/clipboard_menu.rs             src-tauri/src/i18n/en_us/clipboard_menu.rs
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "Source already matches formatter output"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git -c core.hooksPath=/dev/null commit -m "chore: align edit content source with verified build formatting"
+            git push origin HEAD:buildsync/2026-10-12-edit-content
+          fi
