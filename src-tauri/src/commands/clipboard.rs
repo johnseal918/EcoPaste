@@ -425,7 +425,12 @@ pub async fn get_editable_clipboard_text(
     source_id: String,
 ) -> Result<EditableClipboardText> {
     let pool = db.pool().await;
-    check_edit_source(&app, &pool, &source_id).await
+    let editable = check_edit_source(&app, &pool, &source_id).await?;
+    // 编辑弹窗显示前关闭可能来自左右副面板的悬停预览，避免遮挡编辑器。
+    if let Err(error) = window::preview::close_clipboard_preview_now(&app) {
+        log::warn!("hide old preview before text edit failed: {error}");
+    }
+    Ok(editable)
 }
 
 /// 临时复制编辑结果，只写系统剪贴板，不修改原历史。
@@ -599,7 +604,7 @@ async fn finish_paste(app: &AppHandle, restore_editor_focus: bool) -> Result<()>
         // 固定时窗口保持可见：macOS 上 panel 仍是 key window 会吞掉 ⌘V，需先 resign key
         // 让键焦点回到前台 App 的窗口；Windows 剪贴板窗口 focusable=false，无需处理。
         #[cfg(target_os = "macos")]
-        if let Err(err) = window::macos::resign_clipboard_panel_key(&app) {
+        if let Err(err) = window::macos::resign_clipboard_panel_key(app) {
             log::warn!("resign clipboard panel key before paste failed: {err:?}");
         }
     } else if let Err(err) = window::hide_window(&app, CLIPBOARD_WINDOW_LABEL) {
@@ -618,7 +623,7 @@ async fn finish_paste(app: &AppHandle, restore_editor_focus: bool) -> Result<()>
         #[cfg(target_os = "macos")]
         {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            if let Err(err) = window::macos::make_clipboard_panel_key(&app) {
+            if let Err(err) = window::macos::make_clipboard_panel_key(app) {
                 log::warn!("restore clipboard panel key after paste failed: {err:?}");
             }
         }
