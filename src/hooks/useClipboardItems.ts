@@ -308,8 +308,8 @@ export const useClipboardItems = (query: ClipboardItemQuery) => {
       keyword: query.keyword,
       kind: query.kind,
       pinned: query.pinned,
-      sort: query.sort,
       recentFirst: query.recentFirst,
+      sort: query.sort,
     };
     resetAndReload();
   }, [
