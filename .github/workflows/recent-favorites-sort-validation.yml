@@ -1,0 +1,86 @@
+name: EcoPaste Recent Favorites Sorting Windows Validation
+
+"on":
+  push:
+    branches:
+      - validation/2026-10-13-recent-panel-sort
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recent-favorite-sort-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    name: Validate recent-first favorites and build Windows x64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Generate Tauri icons
+        run: pnpm build:icon
+        env:
+          PLATFORM: windows-latest
+      - name: Format changed frontend files
+        run: >-
+          pnpm exec biome check --write
+          src/types/clipboard.ts
+          src/hooks/useClipboardItems.ts
+          src/pages/Clipboard/components/List.tsx
+          src/pages/PinnedPanel/index.tsx
+          src/constants/sidePanels.ts
+          src/constants/sidePanels.test.ts
+      - name: Format Rust source
+        working-directory: src-tauri
+        run: cargo fmt --all
+      - name: Upload formatted source
+        uses: actions/upload-artifact@v4
+        with:
+          name: EcoPaste-RecentSort-FormattedSource
+          path: |
+            src/types/clipboard.ts
+            src/hooks/useClipboardItems.ts
+            src/pages/Clipboard/components/List.tsx
+            src/pages/PinnedPanel/index.tsx
+            src/constants/sidePanels.ts
+            src/constants/sidePanels.test.ts
+            src-tauri/src/db/models.rs
+            src-tauri/src/db/items.rs
+          if-no-files-found: error
+      - name: Side panel query regression tests
+        run: pnpm exec tsx --test src/constants/sidePanels.test.ts
+      - name: Frontend lint and types
+        run: pnpm lint && pnpm tsc
+      - name: Rust Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Build frontend
+        run: pnpm build
+      - name: Build Windows EXE
+        run: pnpm tauri build --no-bundle --target x86_64-pc-windows-msvc
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: EcoPaste-Windows-x64-RecentFavoritesSort
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/EcoPaste.exe
+          if-no-files-found: error
