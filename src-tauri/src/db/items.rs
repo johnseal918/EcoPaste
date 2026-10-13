@@ -822,7 +822,7 @@ async fn fetch_items(
     if q.recent_first {
         // 快捷查找视图跨置顶/手动排序条目统一按最近时间排列。
         qb.push(
-            " ORDER BY clipboard_items.updated_at DESC, \\
+            " ORDER BY clipboard_items.updated_at DESC, \
              clipboard_items.created_at DESC, clipboard_items.id DESC",
         );
     } else {
@@ -840,10 +840,10 @@ async fn fetch_items(
             None => {
                 // 原有设计：置顶在前，再按独立手动排序；不可由快捷查找需求破坏。
                 qb.push(
-                    " ORDER BY clipboard_items.is_pinned DESC, \\
-                     CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order IS NULL ELSE 1 END ASC, \\
-                     CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order END ASC, \\
-                     CASE WHEN clipboard_items.is_pinned = 0 THEN clipboard_items.priority_order IS NULL ELSE 1 END ASC, \\
+                    " ORDER BY clipboard_items.is_pinned DESC, \
+                     CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order IS NULL ELSE 1 END ASC, \
+                     CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order END ASC, \
+                     CASE WHEN clipboard_items.is_pinned = 0 THEN clipboard_items.priority_order IS NULL ELSE 1 END ASC, \
                      CASE WHEN clipboard_items.is_pinned = 0 THEN clipboard_items.priority_order END ASC, ",
                 );
             }
