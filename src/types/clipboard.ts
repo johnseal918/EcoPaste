@@ -160,6 +160,8 @@ export interface ClipboardItemQuery {
   group?: ClipboardGroup;
   keyword?: string;
   sort?: ClipboardItemSort;
+  /** 严格按最近更新时间排列，忽略置顶/普通手动顺序的展示优先级。 */
+  recentFirst?: boolean;
   limit?: number;
   offset?: number;
 }

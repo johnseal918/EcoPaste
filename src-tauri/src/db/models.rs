@@ -243,6 +243,9 @@ pub struct ClipboardItemQuery {
     pub group: Option<ClipboardGroupFilter>,
     pub keyword: Option<String>,
     pub sort: ClipboardItemSort,
+    /// 收藏和内容分类快捷查找：严格按最近更新时间排序，不让置顶/手动排序抢位。
+    /// 只影响查询展示次序，数据库中的独立手动顺序完全不变。
+    pub recent_first: bool,
     pub limit: i64,
     pub offset: i64,
 }
@@ -268,6 +271,7 @@ impl Default for ClipboardItemQuery {
             group: None,
             keyword: None,
             sort: ClipboardItemSort::UpdatedAt,
+            recent_first: false,
             limit: 20,
             offset: 0,
         }

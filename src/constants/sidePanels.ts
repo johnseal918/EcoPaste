@@ -1,4 +1,8 @@
-import type { ClipboardGroupIcon } from "@/types/clipboard";
+import type {
+  ClipboardGroupIcon,
+  ClipboardItemQuery,
+  ClipboardKind,
+} from "@/types/clipboard";
 import type { SidePanelKind } from "@/types/settings";
 
 export interface SidePanelDefinition {
@@ -36,3 +40,15 @@ export const SIDE_PANEL_DEFINITIONS: SidePanelDefinition[] = [
 ];
 
 export const SIDE_PANEL_KINDS = SIDE_PANEL_DEFINITIONS.map(({ kind }) => kind);
+
+/**
+ * Left/right panel queries share the same contract. Pin stays manually ordered;
+ * favorites and content categories are retrieval views sorted by most recent use.
+ */
+export function sidePanelQuery(kind: SidePanelKind): ClipboardItemQuery {
+  const base: ClipboardItemQuery = { sort: "updatedAtDesc" };
+  if (kind === "pinned") return { ...base, pinned: true };
+  const recent: ClipboardItemQuery = { ...base, recentFirst: true };
+  if (kind === "favorite") return { ...recent, favorite: true };
+  return { ...recent, kind: kind as ClipboardKind };
+}

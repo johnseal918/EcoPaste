@@ -807,7 +807,8 @@ fn escape_like(keyword: &str) -> String {
     out
 }
 
-/// 拼装查询：过滤（含可选关键词匹配） + 手动排序优先 + 配置排序 + 分页。
+/// 拼装查询：过滤 + 常规手动优先 / 最近时间优先 + 稳定分页。
+/// recent_first 只供收藏/内容快捷查找页使用，绝不修改持久化的排序字段。
 /// 所有 bind 均传入拥有所有权/Copy 的值，避免 `QueryBuilder` 借用 `q` 引发的生命周期问题。
 async fn fetch_items(
     pool: &SqlitePool,
@@ -818,36 +819,48 @@ async fn fetch_items(
     qb.push(" WHERE 1 = 1");
     push_filter_clauses(&mut qb, q, &keyword);
 
-    match q.pinned {
-        Some(true) => {
-            qb.push(" ORDER BY clipboard_items.pin_order IS NULL, clipboard_items.pin_order ASC, ");
+    if q.recent_first {
+        // 快捷查找视图跨置顶/手动排序条目统一按最近时间排列。
+        qb.push(
+            " ORDER BY clipboard_items.updated_at DESC, \\
+             clipboard_items.created_at DESC, clipboard_items.id DESC",
+        );
+    } else {
+        match q.pinned {
+            Some(true) => {
+                qb.push(
+                    " ORDER BY clipboard_items.pin_order IS NULL, clipboard_items.pin_order ASC, ",
+                );
+            }
+            Some(false) => {
+                qb.push(
+                    " ORDER BY clipboard_items.priority_order IS NULL, clipboard_items.priority_order ASC, ",
+                );
+            }
+            None => {
+                // 原有设计：置顶在前，再按独立手动排序；不可由快捷查找需求破坏。
+                qb.push(
+                    " ORDER BY clipboard_items.is_pinned DESC, \\
+                     CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order IS NULL ELSE 1 END ASC, \\
+                     CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order END ASC, \\
+                     CASE WHEN clipboard_items.is_pinned = 0 THEN clipboard_items.priority_order IS NULL ELSE 1 END ASC, \\
+                     CASE WHEN clipboard_items.is_pinned = 0 THEN clipboard_items.priority_order END ASC, ",
+                );
+            }
         }
-        Some(false) => {
-            qb.push(
-                " ORDER BY clipboard_items.priority_order IS NULL, clipboard_items.priority_order ASC, ",
-            );
+        match q.sort {
+            ClipboardItemSort::CreatedAt => {
+                qb.push("clipboard_items.created_at DESC");
+            }
+            ClipboardItemSort::UpdatedAt => {
+                qb.push("clipboard_items.updated_at DESC, clipboard_items.created_at DESC");
+            }
+            ClipboardItemSort::UseCount => {
+                qb.push("clipboard_items.use_count DESC, clipboard_items.created_at DESC");
+            }
         }
-        None => {
-            // 保留通用查询的历史语义：置顶恒在前；未显式过滤时再分别套用各自手动顺序。
-            qb.push(
-                " ORDER BY clipboard_items.is_pinned DESC, \
-                 CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order IS NULL ELSE 1 END ASC, \
-                 CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order END ASC, \
-                 CASE WHEN clipboard_items.is_pinned = 0 THEN clipboard_items.priority_order IS NULL ELSE 1 END ASC, \
-                 CASE WHEN clipboard_items.is_pinned = 0 THEN clipboard_items.priority_order END ASC, ",
-            );
-        }
-    }
-    match q.sort {
-        ClipboardItemSort::CreatedAt => {
-            qb.push("clipboard_items.created_at DESC");
-        }
-        ClipboardItemSort::UpdatedAt => {
-            qb.push("clipboard_items.updated_at DESC, clipboard_items.created_at DESC");
-        }
-        ClipboardItemSort::UseCount => {
-            qb.push("clipboard_items.use_count DESC, clipboard_items.created_at DESC");
-        }
+        // 时间、使用次数和手动排序位置相同时，稳定分页不得随机换序。
+        qb.push(", clipboard_items.id DESC");
     }
 
     qb.push(" LIMIT ").push_bind(q.limit);
@@ -1517,6 +1530,172 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(ids(&by_use), ["b", "a", "c"]);
+    }
+
+    #[tokio::test]
+    async fn recent_first_favorite_and_kind_views_ignore_pin_and_manual_rank() {
+        let pool = memory_pool().await;
+        let time = |n: i64| DateTime::from_timestamp(1_700_000_000 + n, 0).unwrap();
+        let make = |id: &str,
+                        age: i64,
+                        kind: ClipboardKind,
+                        favorite: bool,
+                        pinned: bool,
+                        priority: Option<i64>,
+                        pin_order: Option<i64>| {
+            let mut item = sample_item(id);
+            item.kind = kind;
+            item.content_hash = content_hash(kind, &item.content);
+            item.is_favorite = favorite;
+            item.is_pinned = pinned;
+            item.priority_order = priority;
+            item.pin_order = pin_order;
+            item.created_at = time(age);
+            item.updated_at = time(age);
+            item
+        };
+
+        let samples = [
+            make("old-pin", 10, ClipboardKind::Text, true, true, None, Some(1)),
+            make("new-pin", 70, ClipboardKind::Text, true, true, None, Some(2)),
+            make("manual", 20, ClipboardKind::Text, true, false, Some(1), None),
+            make("ordinary", 50, ClipboardKind::Text, true, false, None, None),
+            make("latest", 90, ClipboardKind::Text, false, false, None, None),
+            make("image-old", 40, ClipboardKind::Image, false, true, None, Some(3)),
+            make("image-new", 80, ClipboardKind::Image, false, false, None, None),
+            make("files-old", 60, ClipboardKind::Files, false, true, None, Some(4)),
+            make("files-new", 95, ClipboardKind::Files, false, false, None, None),
+        ];
+        for item in &samples {
+            insert_item(&pool, item).await.unwrap();
+        }
+
+        // 收藏侧面板包含置顶收藏，但展示时必须按最近时间穿插排列。
+        let favorite_side = ClipboardItemQuery {
+            favorite: Some(true),
+            recent_first: true,
+            // 即便调用者传入旧的其它 sort，也不得抢占最近时间优先的语义。
+            sort: ClipboardItemSort::UseCount,
+            ..Default::default()
+        };
+        assert_eq!(
+            ids(&query_items(&pool, &favorite_side).await.unwrap()),
+            ["new-pin", "ordinary", "manual", "old-pin"]
+        );
+
+        // 主收藏页继续排除主列表原已隐藏的置顶项，但不让手动排序抢位。
+        let favorite_main = ClipboardItemQuery {
+            pinned: Some(false),
+            ..favorite_side.clone()
+        };
+        assert_eq!(
+            ids(&query_items(&pool, &favorite_main).await.unwrap()),
+            ["ordinary", "manual"]
+        );
+
+        let text_side = ClipboardItemQuery {
+            kind: Some(ClipboardKind::Text),
+            recent_first: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            ids(&query_items(&pool, &text_side).await.unwrap()),
+            ["latest", "new-pin", "ordinary", "manual", "old-pin"]
+        );
+        for (kind, expected) in [
+            (ClipboardKind::Image, ["image-new", "image-old"]),
+            (ClipboardKind::Files, ["files-new", "files-old"]),
+        ] {
+            let q = ClipboardItemQuery {
+                kind: Some(kind),
+                recent_first: true,
+                ..Default::default()
+            };
+            assert_eq!(ids(&query_items(&pool, &q).await.unwrap()), expected);
+        }
+
+        // 已通过验收的普通历史手动排序和置顶专属手动排序仍保持原样。
+        let ordinary_main = ClipboardItemQuery {
+            pinned: Some(false),
+            ..Default::default()
+        };
+        let normal_items = query_items(&pool, &ordinary_main).await.unwrap();
+        let normal_ids = ids(&normal_items);
+        assert_eq!(normal_ids[0], "manual");
+        assert_eq!(normal_ids[1], "files-new");
+        let pinned_only = ClipboardItemQuery {
+            pinned: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(
+            ids(&query_items(&pool, &pinned_only).await.unwrap()),
+            ["old-pin", "new-pin", "image-old", "files-old"]
+        );
+        // 查询仅切换展示顺序：不更新任何已有 pin / priority 位置。
+        assert_eq!(
+            find_item_by_id(&pool, "manual")
+                .await
+                .unwrap()
+                .unwrap()
+                .priority_order,
+            Some(1)
+        );
+        assert_eq!(
+            find_item_by_id(&pool, "old-pin")
+                .await
+                .unwrap()
+                .unwrap()
+                .pin_order,
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn recent_first_pagination_is_stable_when_timestamps_are_equal() {
+        let pool = memory_pool().await;
+        for id in ["a", "z", "m"] {
+            let mut item = sample_item(id);
+            item.is_favorite = true;
+            item.updated_at = DateTime::from_timestamp(1_700_000_123, 0).unwrap();
+            item.created_at = DateTime::from_timestamp(1_700_000_123, 0).unwrap();
+            insert_item(&pool, &item).await.unwrap();
+        }
+        let q = ClipboardItemQuery {
+            favorite: Some(true),
+            recent_first: true,
+            limit: 2,
+            ..Default::default()
+        };
+        let (first, total) = query_items_page(&pool, &q).await.unwrap();
+        let (second, second_total) = query_items_page(
+            &pool,
+            &ClipboardItemQuery {
+                offset: 2,
+                ..q.clone()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!((total, second_total), (3, 3));
+        assert_eq!(ids(&first), ["z", "m"]);
+        assert_eq!(ids(&second), ["a"]);
+        assert_eq!(
+            ids(&query_items(&pool, &q).await.unwrap()),
+            ["z", "m"]
+        );
+    }
+
+    #[test]
+    fn recent_first_query_field_is_opt_in_and_backwards_compatible() {
+        let original: ClipboardItemQuery =
+            serde_json::from_value(serde_json::json!({"favorite": true})).unwrap();
+        assert!(!original.recent_first);
+        let q: ClipboardItemQuery = serde_json::from_value(
+            serde_json::json!({"favorite": true, "recentFirst": true}),
+        )
+        .unwrap();
+        assert!(q.recent_first);
+        assert_eq!(serde_json::to_value(&q).unwrap()["recentFirst"], true);
     }
 
     #[tokio::test]

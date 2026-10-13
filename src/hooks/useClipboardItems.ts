@@ -309,6 +309,7 @@ export const useClipboardItems = (query: ClipboardItemQuery) => {
       kind: query.kind,
       pinned: query.pinned,
       sort: query.sort,
+      recentFirst: query.recentFirst,
     };
     resetAndReload();
   }, [
@@ -320,6 +321,7 @@ export const useClipboardItems = (query: ClipboardItemQuery) => {
     query.kind,
     query.pinned,
     query.sort,
+    query.recentFirst,
   ]);
 
   return {

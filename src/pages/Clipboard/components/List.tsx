@@ -144,7 +144,9 @@ const List: FC<ListProps> = ({ onEditContent }) => {
     keyword,
     kind: category ?? void 0,
     pinned: false,
-    sort,
+    // 收藏分类以最近更新时间优先；普通历史和自定义分组保持手动排序语义。
+    recentFirst: range === "favorite",
+    sort: range === "favorite" ? "updatedAtDesc" : sort,
   });
   const {
     closeHoverPreviewForScroll,

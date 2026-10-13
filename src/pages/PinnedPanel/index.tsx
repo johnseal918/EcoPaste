@@ -25,17 +25,14 @@ import { TAURI_EVENT } from "@/constants/events";
 import {
   SIDE_PANEL_DEFINITIONS,
   SIDE_PANEL_KINDS,
+  sidePanelQuery,
 } from "@/constants/sidePanels";
 import { WINDOW_LABEL } from "@/constants/windows";
 import { useClipboardItems } from "@/hooks/useClipboardItems";
 import { useClipboardWindowEditableFocus } from "@/hooks/useClipboardWindowEditableFocus";
 import { useTauriListen } from "@/hooks/useTauriListen";
 import { settingsState, updateSettings } from "@/stores/settings";
-import type {
-  ClipboardItem,
-  ClipboardItemQuery,
-  ClipboardKind,
-} from "@/types/clipboard";
+import type { ClipboardItem } from "@/types/clipboard";
 import type { SidePanelKind } from "@/types/settings";
 import ClipboardCard from "../Clipboard/components/cards/ClipboardCard";
 import OrderPositionModal from "../Clipboard/components/OrderPositionModal";
@@ -256,7 +253,7 @@ const SidePanelColumn: FC<SidePanelColumnProps> = (props) => {
   const { t } = useTranslation("clipboard");
   const settings = useSnapshot(settingsState);
   const [orderTarget, setOrderTarget] = useState<ClipboardItem | null>(null);
-  const query = panelQuery(kind);
+  const query = sidePanelQuery(kind);
   const { getItem, loadedInitial, loading, loadRange, reload, total } =
     useClipboardItems(query);
 
@@ -543,15 +540,6 @@ const PanelHeaderButton: FC<{
     </Tooltip>
   );
 };
-
-function panelQuery(kind: SidePanelKind): ClipboardItemQuery {
-  const base: ClipboardItemQuery = { sort: "updatedAtDesc" };
-
-  if (kind === "pinned") return { ...base, pinned: true };
-  if (kind === "favorite") return { ...base, favorite: true };
-
-  return { ...base, kind: kind as ClipboardKind };
-}
 
 function normalizePanelOrder(
   preferred: SidePanelKind[],
