@@ -822,7 +822,7 @@ async fn fetch_items(
     if q.recent_first {
         // 快捷查找视图跨置顶/手动排序条目统一按最近时间排列。
         qb.push(
-            " ORDER BY clipboard_items.updated_at DESC, \\
+            " ORDER BY clipboard_items.updated_at DESC, \
              clipboard_items.created_at DESC, clipboard_items.id DESC",
         );
     } else {
@@ -840,10 +840,10 @@ async fn fetch_items(
             None => {
                 // 原有设计：置顶在前，再按独立手动排序；不可由快捷查找需求破坏。
                 qb.push(
-                    " ORDER BY clipboard_items.is_pinned DESC, \\
-                     CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order IS NULL ELSE 1 END ASC, \\
-                     CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order END ASC, \\
-                     CASE WHEN clipboard_items.is_pinned = 0 THEN clipboard_items.priority_order IS NULL ELSE 1 END ASC, \\
+                    " ORDER BY clipboard_items.is_pinned DESC, \
+                     CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order IS NULL ELSE 1 END ASC, \
+                     CASE WHEN clipboard_items.is_pinned = 1 THEN clipboard_items.pin_order END ASC, \
+                     CASE WHEN clipboard_items.is_pinned = 0 THEN clipboard_items.priority_order IS NULL ELSE 1 END ASC, \
                      CASE WHEN clipboard_items.is_pinned = 0 THEN clipboard_items.priority_order END ASC, ",
                 );
             }
@@ -1537,12 +1537,12 @@ mod tests {
         let pool = memory_pool().await;
         let time = |n: i64| DateTime::from_timestamp(1_700_000_000 + n, 0).unwrap();
         let make = |id: &str,
-                        age: i64,
-                        kind: ClipboardKind,
-                        favorite: bool,
-                        pinned: bool,
-                        priority: Option<i64>,
-                        pin_order: Option<i64>| {
+                    age: i64,
+                    kind: ClipboardKind,
+                    favorite: bool,
+                    pinned: bool,
+                    priority: Option<i64>,
+                    pin_order: Option<i64>| {
             let mut item = sample_item(id);
             item.kind = kind;
             item.content_hash = content_hash(kind, &item.content);
@@ -1556,15 +1556,71 @@ mod tests {
         };
 
         let samples = [
-            make("old-pin", 10, ClipboardKind::Text, true, true, None, Some(1)),
-            make("new-pin", 70, ClipboardKind::Text, true, true, None, Some(2)),
-            make("manual", 20, ClipboardKind::Text, true, false, Some(1), None),
+            make(
+                "old-pin",
+                10,
+                ClipboardKind::Text,
+                true,
+                true,
+                None,
+                Some(1),
+            ),
+            make(
+                "new-pin",
+                70,
+                ClipboardKind::Text,
+                true,
+                true,
+                None,
+                Some(2),
+            ),
+            make(
+                "manual",
+                20,
+                ClipboardKind::Text,
+                true,
+                false,
+                Some(1),
+                None,
+            ),
             make("ordinary", 50, ClipboardKind::Text, true, false, None, None),
             make("latest", 90, ClipboardKind::Text, false, false, None, None),
-            make("image-old", 40, ClipboardKind::Image, false, true, None, Some(3)),
-            make("image-new", 80, ClipboardKind::Image, false, false, None, None),
-            make("files-old", 60, ClipboardKind::Files, false, true, None, Some(4)),
-            make("files-new", 95, ClipboardKind::Files, false, false, None, None),
+            make(
+                "image-old",
+                40,
+                ClipboardKind::Image,
+                false,
+                true,
+                None,
+                Some(3),
+            ),
+            make(
+                "image-new",
+                80,
+                ClipboardKind::Image,
+                false,
+                false,
+                None,
+                None,
+            ),
+            make(
+                "files-old",
+                60,
+                ClipboardKind::Files,
+                false,
+                true,
+                None,
+                Some(4),
+            ),
+            make(
+                "files-new",
+                95,
+                ClipboardKind::Files,
+                false,
+                false,
+                None,
+                None,
+            ),
         ];
         for item in &samples {
             insert_item(&pool, item).await.unwrap();
@@ -1679,10 +1735,7 @@ mod tests {
         assert_eq!((total, second_total), (3, 3));
         assert_eq!(ids(&first), ["z", "m"]);
         assert_eq!(ids(&second), ["a"]);
-        assert_eq!(
-            ids(&query_items(&pool, &q).await.unwrap()),
-            ["z", "m"]
-        );
+        assert_eq!(ids(&query_items(&pool, &q).await.unwrap()), ["z", "m"]);
     }
 
     #[test]
@@ -1690,10 +1743,9 @@ mod tests {
         let original: ClipboardItemQuery =
             serde_json::from_value(serde_json::json!({"favorite": true})).unwrap();
         assert!(!original.recent_first);
-        let q: ClipboardItemQuery = serde_json::from_value(
-            serde_json::json!({"favorite": true, "recentFirst": true}),
-        )
-        .unwrap();
+        let q: ClipboardItemQuery =
+            serde_json::from_value(serde_json::json!({"favorite": true, "recentFirst": true}))
+                .unwrap();
         assert!(q.recent_first);
         assert_eq!(serde_json::to_value(&q).unwrap()["recentFirst"], true);
     }
