@@ -60,7 +60,10 @@ export function useClipboardPreviewController(
   const clipboardWindowVisibleRef = useRef(true);
   const previewSessionRef = useRef<PreviewSession | null>(null);
   const previewOpenRequestIdRef = useRef(0);
-  const previewOpenInFlightRef = useRef<{ itemId: string; requestId: number } | null>(null);
+  const previewOpenInFlightRef = useRef<{
+    itemId: string;
+    requestId: number;
+  } | null>(null);
   const previewOpenRetryAfterRef = useRef(0);
   const previewMoveFrameRef = useRef<number | null>(null);
   const previewMoveTargetRef = useRef<{

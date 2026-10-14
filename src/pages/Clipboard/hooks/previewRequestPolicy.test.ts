@@ -15,6 +15,9 @@ test("after a handle error retry waits rather than opening every frame", () => {
   const failedAt = 4_000;
   const retryAfter = failedAt + PREVIEW_OPEN_FAILURE_COOLDOWN_MS;
   assert.equal(canStartPreviewOpen("a", null, retryAfter, failedAt), false);
-  assert.equal(canStartPreviewOpen("a", null, retryAfter, retryAfter - 1), false);
+  assert.equal(
+    canStartPreviewOpen("a", null, retryAfter, retryAfter - 1),
+    false,
+  );
   assert.equal(canStartPreviewOpen("a", null, retryAfter, retryAfter), true);
 });

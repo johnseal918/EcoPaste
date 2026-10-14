@@ -32,8 +32,7 @@ use tauri_nspanel::{tauri_panel, ManagerExt, PanelLevel, WebviewWindowExt};
 use windows::Win32::Foundation::HWND;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
-    IsWindow, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_SHOWWINDOW,
+    IsWindow, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
 };
 
 const PREVIEW_UPDATED_EVENT: &str = "preview://updated";
@@ -502,7 +501,9 @@ async fn ensure_preview_window_ready(
             // the normal builder can re-create it with the same window label.
             if attempt == PREVIEW_NATIVE_RECYCLE_AT && !recycled {
                 recycled = true;
-                log::warn!("preview WebView registered without a valid HWND; attempting one recovery");
+                log::warn!(
+                    "preview WebView registered without a valid HWND; attempting one recovery"
+                );
                 if let Err(error) = window.destroy() {
                     log::warn!("dispose stale preview WebView failed: {error}");
                 }
@@ -510,10 +511,10 @@ async fn ensure_preview_window_ready(
             tokio::time::sleep(Duration::from_millis(PREVIEW_NATIVE_HANDLE_POLL_MS)).await;
         }
 
-        Err(anyhow::anyhow!(
-            "preview native window handle unavailable after bounded recovery"
+        Err(
+            anyhow::anyhow!("preview native window handle unavailable after bounded recovery")
+                .into(),
         )
-        .into())
     }
 }
 
