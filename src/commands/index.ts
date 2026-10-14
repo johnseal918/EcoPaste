@@ -29,6 +29,10 @@ import type { Settings, SettingsPatch, SidePanelKind } from "@/types/settings";
 import { getMessageApi, getModalApi } from "@/utils/feedback";
 import { log } from "@/utils/log";
 import { confirmClearClipboardItems } from "./confirmClearClipboardItems";
+import {
+  isTransientPreviewHandleError,
+  shouldReportPreviewHandleError,
+} from "./previewErrorPolicy";
 
 /**
  * Rust 端 `AppError` 序列化后的形状：`kind` 用于按变体分流，`message` 给用户看。
@@ -312,6 +316,13 @@ const toAppError = (error: unknown): AppError => {
 };
 
 /**
+ * Preview mousemove can issue more than one request while Windows recycles a
+ * native WebView handle. Report a persistent handle failure, but never stack
+ * identical toasts for each hover/mousemove event.
+ */
+let lastPreviewHandleToastAt = Number.NEGATIVE_INFINITY;
+
+/**
  * invoke 的通用包装：失败 → log + toast + rethrow。
  * `label` 用于 toast 文案（"xxx 失败：message"）。
  */
@@ -326,12 +337,31 @@ const call = async <T>(
     const appError = toAppError(error);
 
     log.error(`invoke ${command} failed`, appError);
-    getMessageApi().error(
-      i18n.t("commands:error", {
-        label: i18n.t(labelKey),
-        message: appError.message,
-      }),
+    const now = Date.now();
+    const shouldReport = shouldReportPreviewHandleError(
+      command,
+      TAURI_COMMAND.SHOW_CLIPBOARD_PREVIEW,
+      appError.message,
+      lastPreviewHandleToastAt,
+      now,
     );
+    if (shouldReport) {
+      if (
+        isTransientPreviewHandleError(
+          command,
+          TAURI_COMMAND.SHOW_CLIPBOARD_PREVIEW,
+          appError.message,
+        )
+      ) {
+        lastPreviewHandleToastAt = now;
+      }
+      getMessageApi().error(
+        i18n.t("commands:error", {
+          label: i18n.t(labelKey),
+          message: appError.message,
+        }),
+      );
+    }
 
     throw appError;
   }

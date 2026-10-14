@@ -471,6 +471,19 @@ fn snapshot_phase(state: &RuntimeState, has_window: bool) -> LifecyclePhase {
     state.phase
 }
 
+/// Lightweight phase check for a background preview open. During the
+/// before-destroy interval Tauri can still return a registered WebView even
+/// though its native HWND is on the way out; waiting is safer than using it.
+pub fn is_destroy_pending(app: &AppHandle, label: &str) -> bool {
+    manager(app).is_some_and(|manager| {
+        manager.with_states(|states| {
+            states
+                .get(label)
+                .is_some_and(|state| state.phase == LifecyclePhase::DestroyPending)
+        })
+    })
+}
+
 /// 取窗口的按需重建函数；非 `DestroyWhenIdle` 或未登记窗口返回 `None`。
 /// 供 `show_window` 在窗口已销毁时重建 WebView。
 pub fn rebuild_fn(label: &str) -> Option<fn(&AppHandle) -> crate::core::Result<()>> {

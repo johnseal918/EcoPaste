@@ -139,7 +139,7 @@ pub async fn show_clipboard_preview(
     anchor: PreviewAnchorRect,
     source_window_label: Option<String>,
 ) -> Result<Option<ClipboardPreviewState>> {
-    window::preview::show_clipboard_preview(&app, item_id, anchor, source_window_label)
+    window::preview::show_clipboard_preview(&app, item_id, anchor, source_window_label).await
 }
 
 #[tauri::command]

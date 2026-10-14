@@ -32,7 +32,8 @@ use tauri_nspanel::{tauri_panel, ManagerExt, PanelLevel, WebviewWindowExt};
 use windows::Win32::Foundation::HWND;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
-    SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    IsWindow, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_SHOWWINDOW,
 };
 
 const PREVIEW_UPDATED_EVENT: &str = "preview://updated";
@@ -42,6 +43,14 @@ const PREVIEW_PANEL_GAP: f64 = 40.0;
 const PREVIEW_PANEL_MARGIN: f64 = 32.0;
 const PREVIEW_POINTER_ANCHOR_SIZE: f64 = 1.0;
 const PREVIEW_HIDE_DELAY_MS: u64 = 180;
+/// A newly built WebView can be registered before Win32 finishes attaching its HWND.
+/// Wait without blocking the UI thread; recycle a persistently invalid window at most once.
+#[cfg(target_os = "windows")]
+const PREVIEW_NATIVE_HANDLE_POLL_MS: u64 = 40;
+#[cfg(target_os = "windows")]
+const PREVIEW_NATIVE_HANDLE_ATTEMPTS: usize = 36;
+#[cfg(target_os = "windows")]
+const PREVIEW_NATIVE_RECYCLE_AT: usize = 18;
 
 static PREVIEW_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
 static PREVIEW_SESSION_ID: AtomicU64 = AtomicU64::new(0);
@@ -135,7 +144,7 @@ pub struct ClipboardPreviewState {
 }
 
 /// 打开或重定向预览窗口，并把最新预览状态广播到预览 webview。
-pub fn show_clipboard_preview(
+pub async fn show_clipboard_preview(
     app: &AppHandle,
     item_id: String,
     anchor: PreviewAnchorRect,
@@ -157,15 +166,29 @@ pub fn show_clipboard_preview(
     }
 
     let request_id = PREVIEW_REQUEST_ID.fetch_add(1, Ordering::SeqCst) + 1;
+    // The idle destroy timer and a hover-open request can otherwise race between
+    // checking registration and using the native HWND. Keep this request protected;
+    // the lease is always released on return, with a short expiration as a fallback.
+    let _lease = PreviewOpenLease::acquire(app, request_id);
+    let Some(window) = ensure_preview_window_ready(app, request_id).await? else {
+        return Ok(None);
+    };
+    if !is_current_preview_request(request_id)
+        || !is_clipboard_window_visible(app)
+        || !source_window.is_visible().unwrap_or(false)
+    {
+        return Ok(None);
+    }
     let session_id = preview_session_id_for_show();
-    let window = ensure_preview_window(app)?;
-    let monitor = resolve_preview_monitor(&source_window)?;
+    let monitor = resolve_preview_monitor(&source_window)
+        .map_err(|error| anyhow::anyhow!("resolve preview source monitor: {error}"))?;
     let work_area = preview_overlay_bounds(&monitor);
     let scale_factor = monitor.scale_factor();
     let clipboard_window = source_window_rect(&source_window);
     let layout = build_preview_layout(&anchor, scale_factor, &work_area, clipboard_window.as_ref());
 
-    prepare_preview_window_for_show(app, &window, &work_area)?;
+    prepare_preview_window_for_show(app, &window, &work_area)
+        .map_err(|error| anyhow::anyhow!("prepare native preview window: {error}"))?;
 
     let state = ClipboardPreviewState {
         request_id,
@@ -188,9 +211,45 @@ pub fn show_clipboard_preview(
     window
         .emit(PREVIEW_UPDATED_EVENT, &state)
         .map_err(|e| anyhow::anyhow!(e))?;
-    show_preview_window(app, &window, &work_area)?;
+    if let Err(error) = show_preview_window(app, &window, &work_area) {
+        set_preview_state(None);
+        return Err(anyhow::anyhow!("show native preview window: {error}").into());
+    }
 
     Ok(Some(state))
+}
+
+/// Keep the preview alive only while one native show is being prepared.
+/// Each concurrent hover request has an independent owner, so completion of an
+/// earlier request never releases a newer request's protection.
+struct PreviewOpenLease<'a> {
+    app: &'a AppHandle,
+    owner: String,
+}
+
+impl<'a> PreviewOpenLease<'a> {
+    fn acquire(app: &'a AppHandle, request_id: u64) -> Self {
+        let owner = format!("preview-open-{request_id}");
+        lifecycle::acquire_keepalive(
+            app,
+            CLIPBOARD_PREVIEW_WINDOW_LABEL,
+            &owner,
+            "prepare-preview-native-window",
+            Some(5_000),
+        );
+        PreviewOpenLease { app, owner }
+    }
+}
+
+impl Drop for PreviewOpenLease<'_> {
+    fn drop(&mut self) {
+        lifecycle::release_keepalive(self.app, CLIPBOARD_PREVIEW_WINDOW_LABEL, &self.owner);
+    }
+}
+
+fn is_current_preview_request(request_id: u64) -> bool {
+    PREVIEW_REQUEST_ID.load(Ordering::SeqCst) == request_id
+        && !PREVIEW_SUPPRESSED.load(Ordering::SeqCst)
 }
 
 /// Ignore a late hover-leave/blur close from another WebView. Each of main,
@@ -397,6 +456,65 @@ fn ensure_preview_window(app: &AppHandle) -> Result<WebviewWindow> {
     ensure_macos_preview_panel(app, &window)?;
 
     Ok(window)
+}
+
+/// Wait for the actual native handle, not merely a Tauri registry entry.
+/// The preview participates in DestroyWhenIdle: its previous HWND can disappear
+/// while a side panel is still sending hover updates. An old request must stop
+/// instead of resurrecting a preview after the mouse leaves the card.
+async fn ensure_preview_window_ready(
+    app: &AppHandle,
+    request_id: u64,
+) -> Result<Option<WebviewWindow>> {
+    #[cfg(target_os = "macos")]
+    {
+        if !is_current_preview_request(request_id) {
+            return Ok(None);
+        }
+        return ensure_preview_window(app).map(Some);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut recycled = false;
+        for attempt in 0..PREVIEW_NATIVE_HANDLE_ATTEMPTS {
+            if !is_current_preview_request(request_id) {
+                return Ok(None);
+            }
+
+            // Respect the existing before-destroy grace period. During it the
+            // window may still be registered but no longer has a usable HWND.
+            if lifecycle::is_destroy_pending(app, CLIPBOARD_PREVIEW_WINDOW_LABEL) {
+                tokio::time::sleep(Duration::from_millis(PREVIEW_NATIVE_HANDLE_POLL_MS)).await;
+                continue;
+            }
+
+            let window = ensure_preview_window(app)?;
+            if let Ok(raw) = window.hwnd() {
+                let hwnd = HWND(raw.0 as isize);
+                if hwnd.0 != 0 && unsafe { IsWindow(hwnd).as_bool() } {
+                    return Ok(Some(window));
+                }
+            }
+
+            // The native handle should normally appear within a few iterations.
+            // A persistently stale registered WebView is disposed once so that
+            // the normal builder can re-create it with the same window label.
+            if attempt == PREVIEW_NATIVE_RECYCLE_AT && !recycled {
+                recycled = true;
+                log::warn!("preview WebView registered without a valid HWND; attempting one recovery");
+                if let Err(error) = window.destroy() {
+                    log::warn!("dispose stale preview WebView failed: {error}");
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(PREVIEW_NATIVE_HANDLE_POLL_MS)).await;
+        }
+
+        Err(anyhow::anyhow!(
+            "preview native window handle unavailable after bounded recovery"
+        )
+        .into())
+    }
 }
 
 fn raise_preview_window(app: &AppHandle, window: &WebviewWindow) -> Result<()> {
