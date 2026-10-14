@@ -1,0 +1,87 @@
+name: EcoPaste Preview Handle Recovery Windows Validation
+
+"on":
+  push:
+    branches:
+      - validation/2026-10-14-preview-handle-recovery
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-handle-recovery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    name: Verify native preview recovery and build Windows x64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Generate Tauri icons
+        run: pnpm build:icon
+        env:
+          PLATFORM: windows-latest
+      - name: Format changed frontend
+        run: >-
+          pnpm exec biome check --write
+          src/commands/index.ts
+          src/commands/previewErrorPolicy.ts
+          src/commands/previewErrorPolicy.test.ts
+          src/pages/Clipboard/hooks/useClipboardPreviewController.ts
+          src/pages/Clipboard/hooks/previewRequestPolicy.ts
+          src/pages/Clipboard/hooks/previewRequestPolicy.test.ts
+      - name: Format Rust
+        working-directory: src-tauri
+        run: cargo fmt --all
+      - name: Upload formatted source
+        uses: actions/upload-artifact@v4
+        with:
+          name: EcoPaste-PreviewHandleRecovery-FormattedSource
+          path: |
+            src/commands/index.ts
+            src/commands/previewErrorPolicy.ts
+            src/commands/previewErrorPolicy.test.ts
+            src/pages/Clipboard/hooks/useClipboardPreviewController.ts
+            src/pages/Clipboard/hooks/previewRequestPolicy.ts
+            src/pages/Clipboard/hooks/previewRequestPolicy.test.ts
+            src-tauri/src/window/preview.rs
+            src-tauri/src/window/lifecycle/mod.rs
+            src-tauri/src/commands/window.rs
+          if-no-files-found: error
+      - name: Preview request and toast regression tests
+        run: pnpm exec tsx --test src/pages/Clipboard/hooks/previewRequestPolicy.test.ts src/commands/previewErrorPolicy.test.ts
+      - name: Frontend lint and types
+        run: pnpm lint && pnpm tsc
+      - name: Rust Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Build frontend
+        run: pnpm build
+      - name: Build Windows EXE
+        run: pnpm tauri build --no-bundle --target x86_64-pc-windows-msvc
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: EcoPaste-Windows-x64-PreviewHandleRecovery
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/EcoPaste.exe
+          if-no-files-found: error
