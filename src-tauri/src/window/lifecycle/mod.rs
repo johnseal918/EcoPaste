@@ -474,6 +474,7 @@ fn snapshot_phase(state: &RuntimeState, has_window: bool) -> LifecyclePhase {
 /// Lightweight phase check for a background preview open. During the
 /// before-destroy interval Tauri can still return a registered WebView even
 /// though its native HWND is on the way out; waiting is safer than using it.
+#[cfg(target_os = "windows")]
 pub fn is_destroy_pending(app: &AppHandle, label: &str) -> bool {
     manager(app).is_some_and(|manager| {
         manager.with_states(|states| {

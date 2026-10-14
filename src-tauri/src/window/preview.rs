@@ -470,7 +470,7 @@ async fn ensure_preview_window_ready(
         if !is_current_preview_request(request_id) {
             return Ok(None);
         }
-        return ensure_preview_window(app).map(Some);
+        ensure_preview_window(app).map(Some)
     }
 
     #[cfg(target_os = "windows")]
