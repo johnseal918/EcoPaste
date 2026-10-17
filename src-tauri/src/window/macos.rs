@@ -10,7 +10,10 @@ use tauri_nspanel::{
     tauri_panel, CollectionBehavior, ManagerExt, PanelLevel, StyleMask, WebviewWindowExt,
 };
 
-use super::{get_window, CLIPBOARD_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PREFERENCE_WINDOW_LABEL};
+use super::{
+    get_window, CLIPBOARD_PINNED_WINDOW_LABEL, CLIPBOARD_SIDE_LEFT_WINDOW_LABEL,
+    CLIPBOARD_WINDOW_LABEL, ONBOARDING_WINDOW_LABEL, PREFERENCE_WINDOW_LABEL,
+};
 use crate::core::Result;
 use crate::settings::SettingsStore;
 
@@ -78,14 +81,16 @@ pub fn setup_clipboard_panel(app_handle: &AppHandle) -> Result<()> {
 
 pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
     if label == CLIPBOARD_WINDOW_LABEL {
-        show_clipboard_panel(app_handle)
-    } else {
-        let window = get_window(app_handle, label)?;
-        window.show().map_err(|e| anyhow::anyhow!(e))?;
-        window.unminimize().map_err(|e| anyhow::anyhow!(e))?;
-        window.set_focus().map_err(|e| anyhow::anyhow!(e))?;
-        Ok(())
+        return show_clipboard_panel(app_handle);
     }
+
+    let window = get_window(app_handle, label)?;
+    window.show().map_err(|e| anyhow::anyhow!(e))?;
+    window.unminimize().map_err(|e| anyhow::anyhow!(e))?;
+    if label != CLIPBOARD_PINNED_WINDOW_LABEL && label != CLIPBOARD_SIDE_LEFT_WINDOW_LABEL {
+        window.set_focus().map_err(|e| anyhow::anyhow!(e))?;
+    }
+    Ok(())
 }
 
 pub fn hide_window(app_handle: &AppHandle, label: &str) -> Result<()> {
@@ -148,6 +153,11 @@ fn show_clipboard_panel(app_handle: &AppHandle) -> Result<()> {
                 super::preview::resume_after_clipboard_show();
                 super::emit_visibility(&panel_handle, CLIPBOARD_WINDOW_LABEL, true);
                 super::lifecycle::on_shown(&panel_handle, CLIPBOARD_WINDOW_LABEL);
+                // macOS 的主 NSPanel 延迟显示。副面板必须等真正 show 后再恢复，
+                // 不能在前面的异步排队阶段误判主窗不可见而永久漏显示。
+                if let Err(err) = super::refresh_side_panels_layout(&panel_handle) {
+                    log::warn!("refresh side panels after macOS main show failed: {err}");
+                }
             }
         }) {
             log::warn!("show clipboard panel on main thread failed: {err}");

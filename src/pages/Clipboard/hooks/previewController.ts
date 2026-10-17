@@ -27,6 +27,8 @@ export interface UseClipboardPreviewControllerOptions {
   getActiveItem: () => ClipboardItem | null;
   itemElementMapRef: RefObject<Map<string, HTMLDivElement>>;
   onHoverSelect: (id: string) => void;
+  /** Optional left/right clipboard side host. Main window remains default. */
+  sourceWindowLabel?: string;
 }
 
 /**
@@ -54,9 +56,12 @@ export function clearHoverTimer(timerRef: { current: number | null }) {
 /**
  * 非关键路径关闭预览，失败只写日志。
  */
-export async function closeClipboardPreviewSilently(reason: string) {
+export async function closeClipboardPreviewSilently(
+  reason: string,
+  sourceWindowLabel?: string,
+) {
   try {
-    await closeClipboardPreview();
+    await closeClipboardPreview(sourceWindowLabel);
   } catch (error) {
     log.error("close clipboard preview failed", { error, reason });
   }

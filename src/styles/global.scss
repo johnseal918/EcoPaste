@@ -23,3 +23,90 @@ html {
   --os-handle-bg-hover: var(--ant-color-text-tertiary);
   --os-handle-bg-active: var(--ant-color-text-secondary);
 }
+
+
+/* 面板零间距，使用加粗的共享边线区分区域。 */
+html {
+  --clipboard-main-border: #92a4b6;
+  --clipboard-panel-border: #b4c2d0;
+  --clipboard-panel-background: #f8f9fb;
+}
+
+html.dark {
+  --clipboard-main-border: #778596;
+  --clipboard-panel-border: #5d6876;
+  --clipboard-panel-background: #222730;
+}
+
+.clipboard-main-frame {
+  box-sizing: border-box;
+  border: 2px solid var(--clipboard-main-border);
+  border-radius: 8px;
+}
+
+.clipboard-side-panel {
+  box-sizing: border-box;
+  border: 2px solid var(--clipboard-panel-border);
+  border-radius: 8px;
+  background-color: var(--clipboard-panel-background);
+}
+
+.clipboard-side-panel + .clipboard-side-panel {
+  border-left-width: 0;
+}
+
+.clipboard-side-panel-header {
+  border-bottom: 2px solid var(--clipboard-panel-border);
+  background-color: var(--panel-header-bg);
+  color: var(--panel-header-text);
+}
+
+.clipboard-side-panel--pinned {
+  --panel-header-bg: #fff2de;
+  --panel-header-text: #885914;
+}
+
+.clipboard-side-panel--favorite {
+  --panel-header-bg: #fcebf1;
+  --panel-header-text: #963b60;
+}
+
+.clipboard-side-panel--text {
+  --panel-header-bg: #eaf3ff;
+  --panel-header-text: #285da4;
+}
+
+.clipboard-side-panel--image {
+  --panel-header-bg: #e6f6f1;
+  --panel-header-text: #21775c;
+}
+
+.clipboard-side-panel--files {
+  --panel-header-bg: #f1ebfd;
+  --panel-header-text: #6845a5;
+}
+
+html.dark .clipboard-side-panel--pinned {
+  --panel-header-bg: #453826;
+  --panel-header-text: #f6cf8e;
+}
+
+html.dark .clipboard-side-panel--favorite {
+  --panel-header-bg: #432d37;
+  --panel-header-text: #f2b3ca;
+}
+
+html.dark .clipboard-side-panel--text {
+  --panel-header-bg: #293a50;
+  --panel-header-text: #b4d5ff;
+}
+
+html.dark .clipboard-side-panel--image {
+  --panel-header-bg: #243d37;
+  --panel-header-text: #a6e0ce;
+}
+
+html.dark .clipboard-side-panel--files {
+  --panel-header-bg: #382e49;
+  --panel-header-text: #d1b9f7;
+}

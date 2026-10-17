@@ -11,7 +11,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { TAURI_COMMAND } from "@/constants/commands";
 import i18n from "@/i18n";
-import { settingsState } from "@/stores/settings";
+import { settingsState } from "@/stores/settingsState";
 import type {
   ClipboardAction,
   ClipboardApp,
@@ -21,12 +21,18 @@ import type {
   ClipboardItemQuery,
   ClipboardKind,
   ClipboardSubKind,
+  EditableClipboardText,
+  SaveEditedClipboardTextResult,
   UpdateNoteResult,
 } from "@/types/clipboard";
-import type { Settings, SettingsPatch } from "@/types/settings";
+import type { Settings, SettingsPatch, SidePanelKind } from "@/types/settings";
 import { getMessageApi, getModalApi } from "@/utils/feedback";
 import { log } from "@/utils/log";
 import { confirmClearClipboardItems } from "./confirmClearClipboardItems";
+import {
+  isTransientPreviewHandleError,
+  shouldReportPreviewHandleError,
+} from "./previewErrorPolicy";
 
 /**
  * Rust 端 `AppError` 序列化后的形状：`kind` 用于按变体分流，`message` 给用户看。
@@ -254,6 +260,10 @@ export interface AppUpdateStatus {
   update: UpdateMetadata | null;
 }
 
+export interface ClipboardSidePanelsRuntimeState {
+  open: SidePanelKind[];
+}
+
 export interface AdminLaunchStatus {
   configured: boolean;
   runningAsAdmin: boolean;
@@ -306,6 +316,13 @@ const toAppError = (error: unknown): AppError => {
 };
 
 /**
+ * Preview mousemove can issue more than one request while Windows recycles a
+ * native WebView handle. Report a persistent handle failure, but never stack
+ * identical toasts for each hover/mousemove event.
+ */
+let lastPreviewHandleToastAt = Number.NEGATIVE_INFINITY;
+
+/**
  * invoke 的通用包装：失败 → log + toast + rethrow。
  * `label` 用于 toast 文案（"xxx 失败：message"）。
  */
@@ -320,12 +337,31 @@ const call = async <T>(
     const appError = toAppError(error);
 
     log.error(`invoke ${command} failed`, appError);
-    getMessageApi().error(
-      i18n.t("commands:error", {
-        label: i18n.t(labelKey),
-        message: appError.message,
-      }),
+    const now = Date.now();
+    const shouldReport = shouldReportPreviewHandleError(
+      command,
+      TAURI_COMMAND.SHOW_CLIPBOARD_PREVIEW,
+      appError.message,
+      lastPreviewHandleToastAt,
+      now,
     );
+    if (shouldReport) {
+      if (
+        isTransientPreviewHandleError(
+          command,
+          TAURI_COMMAND.SHOW_CLIPBOARD_PREVIEW,
+          appError.message,
+        )
+      ) {
+        lastPreviewHandleToastAt = now;
+      }
+      getMessageApi().error(
+        i18n.t("commands:error", {
+          label: i18n.t(labelKey),
+          message: appError.message,
+        }),
+      );
+    }
 
     throw appError;
   }
@@ -334,6 +370,24 @@ const call = async <T>(
 /**
  * 拉取设置首屏快照；后续刷新走 `settings://updated` 事件。
  */
+export const getClipboardSidePanelsState = () => {
+  return call<ClipboardSidePanelsRuntimeState>(
+    TAURI_COMMAND.GET_CLIPBOARD_SIDE_PANELS_STATE,
+    "commands:labels.openWindow",
+  );
+};
+
+export const setClipboardSidePanelOpen = (
+  panel: SidePanelKind,
+  open: boolean,
+) => {
+  return call<ClipboardSidePanelsRuntimeState>(
+    TAURI_COMMAND.SET_CLIPBOARD_SIDE_PANEL_OPEN,
+    "commands:labels.openWindow",
+    { open, panel },
+  );
+};
+
 export const getSettings = () => {
   return call<Settings>(
     TAURI_COMMAND.GET_SETTINGS,
@@ -1001,6 +1055,76 @@ export const pasteClipboardItem = (id: string, plain: boolean) => {
   );
 };
 
+/** 保存编辑结果到当前原记录，并可选择保存后自动粘贴。 */
+export const updateEditedClipboardText = async (
+  sourceId: string,
+  expectedHash: string,
+  text: string,
+  pasteAfterSave: boolean,
+) => {
+  await call<void>(
+    TAURI_COMMAND.UPDATE_EDITED_CLIPBOARD_TEXT,
+    "commands:labels.updateEditedText",
+    { input: { expectedHash, pasteAfterSave, sourceId, text } },
+  );
+  getMessageApi().success(
+    i18n.t(
+      pasteAfterSave
+        ? "commands:messages.editedTextSavedAndPasted"
+        : "commands:messages.editedTextUpdated",
+    ),
+  );
+};
+
+/** 编辑窗口读取完整正文；HTML/RTF 返回操作系统提供的纯文本表示。 */
+export const getEditableClipboardText = (sourceId: string) =>
+  call<EditableClipboardText>(
+    TAURI_COMMAND.GET_EDITABLE_CLIPBOARD_TEXT,
+    "commands:labels.loadEditText",
+    { sourceId },
+  );
+
+/** 只将编辑文字复制到系统剪贴板，绝不覆盖旧历史。 */
+export const copyEditedClipboardText = async (
+  sourceId: string,
+  text: string,
+) => {
+  await call<void>(
+    TAURI_COMMAND.COPY_EDITED_CLIPBOARD_TEXT,
+    "commands:labels.copyEditedText",
+    { sourceId, text },
+  );
+  getMessageApi().success(i18n.t("commands:messages.editedTextCopied"));
+};
+
+/** 编辑结果仅本次粘贴，不入库；Rust 会恢复 Windows 目标焦点。 */
+export const pasteEditedClipboardText = (sourceId: string, text: string) =>
+  call<void>(
+    TAURI_COMMAND.PASTE_EDITED_CLIPBOARD_TEXT,
+    "commands:labels.pasteEditedText",
+    { sourceId, text },
+  );
+
+/** 编辑结果单独入库；已有完全相同内容时尊重原来的去重机制。 */
+export const saveEditedClipboardText = async (
+  sourceId: string,
+  text: string,
+) => {
+  const result = await call<SaveEditedClipboardTextResult>(
+    TAURI_COMMAND.SAVE_EDITED_CLIPBOARD_TEXT,
+    "commands:labels.saveEditedText",
+    { sourceId, text },
+  );
+  getMessageApi().success(
+    i18n.t(
+      result.deduplicated
+        ? "commands:messages.editedTextReused"
+        : "commands:messages.editedTextSaved",
+    ),
+  );
+  return result;
+};
+
 /**
  * 启动一次 OS 级 drag-out：把条目拖出剪贴板窗口到外部应用。
  *
@@ -1068,6 +1192,42 @@ export const toggleClipboardItemPinned = async (
   );
 
   return next;
+};
+
+/** 把普通历史加入手动排序末尾。 */
+export const addClipboardItemPriority = (id: string) => {
+  return call<number>(
+    TAURI_COMMAND.ADD_CLIPBOARD_ITEM_PRIORITY,
+    "commands:labels.updateClipboardOrder",
+    { id },
+  );
+};
+
+/** 移动普通手动排序项到指定位置。 */
+export const moveClipboardItemPriority = (id: string, position: number) => {
+  return call<number>(
+    TAURI_COMMAND.MOVE_CLIPBOARD_ITEM_PRIORITY,
+    "commands:labels.updateClipboardOrder",
+    { id, position },
+  );
+};
+
+/** 取消普通历史手动排序。 */
+export const cancelClipboardItemPriority = (id: string) => {
+  return call<void>(
+    TAURI_COMMAND.CANCEL_CLIPBOARD_ITEM_PRIORITY,
+    "commands:labels.updateClipboardOrder",
+    { id },
+  );
+};
+
+/** 移动置顶项到指定位置。 */
+export const movePinnedClipboardItem = (id: string, position: number) => {
+  return call<number>(
+    TAURI_COMMAND.MOVE_PINNED_CLIPBOARD_ITEM,
+    "commands:labels.updateClipboardOrder",
+    { id, position },
+  );
 };
 
 /**
@@ -1314,10 +1474,14 @@ export const setClipboardWindowAutoHideSuspended = (suspended: boolean) => {
 /**
  * Windows 剪贴板窗口输入编辑模式：输入控件激活期间临时可聚焦，编辑结束后恢复不可聚焦。
  */
-export const setClipboardWindowEditing = async (editing: boolean) => {
+export const setClipboardWindowEditing = async (
+  label: string,
+  editing: boolean,
+) => {
   try {
     await invoke<void>(TAURI_COMMAND.SET_CLIPBOARD_WINDOW_EDITING, {
       editing,
+      label,
     });
   } catch (error) {
     log.error("set clipboard window editing failed", toAppError(error));
@@ -1325,27 +1489,30 @@ export const setClipboardWindowEditing = async (editing: boolean) => {
 };
 
 /**
- * 打开或重定向剪贴板系统级预览 overlay。
- * `anchor` 是剪贴板窗口 webview client 坐标中的列表项矩形。
+ * 打开或重定向现有剪贴板预览。锚点坐标始终是发起请求的
+ * WebView 的 client 坐标；未提供源窗口时保持原版主面板行为。
  */
 export const showClipboardPreview = (
   itemId: string,
   anchor: PreviewAnchorRect,
+  sourceWindowLabel?: string,
 ) => {
   return call<ClipboardPreviewState | null>(
     TAURI_COMMAND.SHOW_CLIPBOARD_PREVIEW,
     "commands:labels.openPreview",
-    { anchor, itemId },
+    { anchor, itemId, sourceWindowLabel },
   );
 };
 
 /**
- * 关闭剪贴板系统级预览 overlay。
+ * 仅关闭由本窗口发起的悬停预览，避免左/右窗口互相取消新预览。
+ * 省略窗口标签则按原版主面板请求处理。
  */
-export const closeClipboardPreview = () => {
+export const closeClipboardPreview = (sourceWindowLabel?: string) => {
   return call<void>(
     TAURI_COMMAND.CLOSE_CLIPBOARD_PREVIEW,
     "commands:labels.closePreview",
+    { sourceWindowLabel },
   );
 };
 

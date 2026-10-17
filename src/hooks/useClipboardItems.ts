@@ -308,6 +308,7 @@ export const useClipboardItems = (query: ClipboardItemQuery) => {
       keyword: query.keyword,
       kind: query.kind,
       pinned: query.pinned,
+      recentFirst: query.recentFirst,
       sort: query.sort,
     };
     resetAndReload();
@@ -320,6 +321,7 @@ export const useClipboardItems = (query: ClipboardItemQuery) => {
     query.kind,
     query.pinned,
     query.sort,
+    query.recentFirst,
   ]);
 
   return {

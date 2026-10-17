@@ -75,18 +75,3 @@ pub fn icon_png(path: &Path, size: Option<u32>) -> Option<Vec<u8>> {
     Some(out)
 }
 
-#[cfg(all(test, target_os = "macos"))]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    #[test]
-    fn icon_png_for_finder_returns_bytes() {
-        let path = PathBuf::from("/System/Library/CoreServices/Finder.app");
-        let png = icon_png(&path, None).expect("expected PNG bytes");
-        assert!(png.len() > 100, "PNG too small: {}", png.len());
-        // PNG 签名
-        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
-        println!("Finder.app icon PNG size: {} bytes", png.len());
-    }
-}

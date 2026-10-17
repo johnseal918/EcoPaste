@@ -8,16 +8,15 @@ import type {
 } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  type TopItemListProps,
-  Virtuoso,
-  type VirtuosoHandle,
-} from "react-virtuoso";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { useSnapshot } from "valtio";
 import {
+  addClipboardItemPriority,
+  cancelClipboardItemPriority,
   deleteClipboardItem,
   hideWindow,
   listClipboardGroups,
+  moveClipboardItemPriority,
   openClipboardItemLink,
   pasteClipboardItem,
   revealClipboardItem,
@@ -61,6 +60,7 @@ import {
 } from "../hooks/useClipboardPreviewController";
 import ClipboardCard from "./cards/ClipboardCard";
 import NoteModal from "./NoteModal";
+import OrderPositionModal from "./OrderPositionModal";
 
 /** 前 10 项的快捷键：index 0-8 对应 1-9，index 9 对应 0 */
 const KEY_HINTS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
@@ -71,6 +71,7 @@ interface ClipboardUpdatedPayload {
   id?: string;
   imported?: boolean;
   kind?: ClipboardKind;
+  metadata?: boolean;
 }
 
 interface ClipboardMenuActionPayload {
@@ -83,13 +84,18 @@ interface ClipboardMenuActionPayload {
  * 剪贴板历史列表：虚拟滚动 + 分类型卡片 + 可视范围分页加载，
  * 跟随关键词（Header 已防抖）检索。
  */
-const List: FC = () => {
+interface ListProps {
+  onEditContent: (id: string) => void;
+}
+
+const List: FC<ListProps> = ({ onEditContent }) => {
   const { t } = useTranslation("clipboard");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [firstVisibleIndex, setFirstVisibleIndex] = useState(0);
   const [isModifierPressed, setIsModifierPressed] = useState(false);
   const [customGroups, setCustomGroups] = useState<ClipboardGroupRecord[]>([]);
   const [noteTarget, setNoteTarget] = useState<ClipboardItem | null>(null);
+  const [orderTarget, setOrderTarget] = useState<ClipboardItem | null>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const isAtTopRef = useRef(true);
   const itemElementMapRef = useRef(new Map<string, HTMLDivElement>());
@@ -137,9 +143,11 @@ const List: FC = () => {
     groupId: groupId ?? void 0,
     keyword,
     kind: category ?? void 0,
-    sort,
+    pinned: false,
+    // 收藏分类以最近更新时间优先；普通历史和自定义分组保持手动排序语义。
+    recentFirst: range === "favorite",
+    sort: range === "favorite" ? "updatedAtDesc" : sort,
   });
-  const topItemCount = countLeadingPinnedItems(getItem);
   const {
     closeHoverPreviewForScroll,
     closePreview,
@@ -213,6 +221,11 @@ const List: FC = () => {
    * 用 ref 读取最新滚动位置，规避闭包陷旧值（事件订阅只挂载一次）。
    */
   const handleClipboardUpdated = (payload: ClipboardUpdatedPayload) => {
+    if (payload.metadata) {
+      reloadCurrentRange();
+      return;
+    }
+
     // 剪贴板窗口隐藏（冻结态）期间不立即 reload：只记 pending，避免隐藏期间频繁复制触发反复 IPC + 重渲染。
     if (!clipboardWindowVisibleRef.current) {
       deferredReloadRef.current = true;
@@ -290,6 +303,11 @@ const List: FC = () => {
     clipboardWindowVisibleRef.current = visible;
     if (!visible) return;
 
+    // A dormant/hidden WebView may miss clipboard://updated broadcasts.
+    // Reconcile with the DB on every show, instead of trusting only
+    // notifications received while the window was invisible.
+    deferredReloadRef.current = true;
+
     const {
       scrollToTopOnOpen,
       selectCategoryOnOpen,
@@ -300,7 +318,10 @@ const List: FC = () => {
       selectRangeOnOpen !== WINDOW_OPEN_SELECTION_PRESERVE ||
       selectCategoryOnOpen !== WINDOW_OPEN_SELECTION_PRESERVE ||
       selectGroupOnOpen !== WINDOW_OPEN_SELECTION_PRESERVE;
-    if (!scrollToTopOnOpen && !shouldResetSelection) return;
+    if (!scrollToTopOnOpen && !shouldResetSelection) {
+      consumeDeferredReloadAtTop();
+      return;
+    }
 
     closePreview("windowOpenReset");
 
@@ -482,7 +503,11 @@ const List: FC = () => {
 
     const next = await toggleClipboardItemPinned(id, !current.isPinned);
 
-    patchItem(id, { isPinned: next });
+    if (next) {
+      removeItem(id);
+      return;
+    }
+
     reloadCurrentRange();
   };
 
@@ -521,6 +546,12 @@ const List: FC = () => {
   >(() => {});
   handleMenuActionRef.current = (payload) => {
     const { action, groupId: targetGroupId, itemId } = payload;
+    // 右侧面板里的条目可能不在当前主列表分页/分组中，编辑入口按 id 读取原文。
+    if (action === "editContent") {
+      closePreview("editContent");
+      onEditContent(itemId);
+      return;
+    }
     const target = findItemById(itemId);
 
     if (!target) return;
@@ -561,6 +592,35 @@ const List: FC = () => {
         return;
       case "togglePinned":
         handleTogglePinned(target.id);
+        return;
+      case "addPriority":
+        void addClipboardItemPriority(target.id).then(() => {
+          reloadCurrentRange();
+        });
+        return;
+      case "priorityFirst":
+        void moveClipboardItemPriority(target.id, 1).then(() => {
+          reloadCurrentRange();
+        });
+        return;
+      case "priorityLast":
+        void moveClipboardItemPriority(target.id, Number.MAX_SAFE_INTEGER).then(
+          () => {
+            reloadCurrentRange();
+          },
+        );
+        return;
+      case "priorityMoveTo":
+        setOrderTarget(target);
+        return;
+      case "priorityCancel":
+        void cancelClipboardItemPriority(target.id).then(() => {
+          reloadCurrentRange();
+        });
+        return;
+      case "pinFirst":
+      case "pinLast":
+      case "pinMoveTo":
         return;
       case "moveToGroup":
         if (!targetGroupId) return;
@@ -812,6 +872,21 @@ const List: FC = () => {
         onClose={handleCloseNote}
         onSaved={handleNoteSaved}
       />
+
+      <OrderPositionModal
+        currentPosition={orderTarget?.priorityOrder}
+        onCancel={() => {
+          setOrderTarget(null);
+        }}
+        onConfirm={async (position) => {
+          if (!orderTarget) return;
+
+          await moveClipboardItemPriority(orderTarget.id, position);
+          setOrderTarget(null);
+          reloadCurrentRange();
+        }}
+        open={orderTarget !== null}
+      />
     </div>
   );
 
@@ -821,13 +896,11 @@ const List: FC = () => {
     return (
       <Virtuoso
         atTopStateChange={handleAtTopStateChange}
-        components={{ TopItemList }}
         computeItemKey={computeItemKey}
         itemContent={renderItemContent}
         rangeChanged={handleRangeChanged}
         ref={virtuosoRef}
         scrollerRef={scrollerRef}
-        topItemCount={topItemCount}
         totalCount={total}
       />
     );
@@ -1356,37 +1429,6 @@ function shouldUseNativeCopy(event: KeyboardEvent) {
 const computeItemKey = (index: number, item?: ClipboardItem) => {
   return item?.id ?? `placeholder-${index}`;
 };
-
-/**
- * Virtuoso 的置顶项会 sticky 覆盖滚动内容；这里补实底色避免下方条目透出。
- */
-const TopItemList: FC<TopItemListProps> = (props) => {
-  const { children, style } = props;
-
-  return (
-    <div className="relative z-10 bg-ant-container" style={style}>
-      {children}
-    </div>
-  );
-};
-
-/**
- * 统计当前已加载页开头连续置顶条目数，供 Virtuoso sticky top items 使用。
- */
-function countLeadingPinnedItems(
-  getItem: (index: number) => ClipboardItem | null,
-) {
-  let count = 0;
-
-  while (true) {
-    const item = getItem(count);
-    if (!item?.isPinned) break;
-
-    count += 1;
-  }
-
-  return count;
-}
 
 /**
  * 判断普通剪贴板更新是否会出现在当前分组列表中。

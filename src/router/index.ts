@@ -2,6 +2,7 @@ import { createHashRouter } from "react-router";
 import Clipboard from "@/pages/Clipboard";
 import ContextMenu, { ContextSubmenu } from "@/pages/ContextMenu";
 import Onboarding from "@/pages/Onboarding";
+import PinnedPanel from "@/pages/PinnedPanel";
 import Preference from "@/pages/Preference";
 import Preview from "@/pages/Preview";
 import Update from "@/pages/Update";
@@ -10,6 +11,14 @@ export const router = createHashRouter([
   {
     Component: Clipboard,
     path: "/",
+  },
+  {
+    Component: PinnedPanel,
+    path: "/clipboard-pinned",
+  },
+  {
+    Component: PinnedPanel,
+    path: "/clipboard-side-left",
   },
   {
     Component: Preference,

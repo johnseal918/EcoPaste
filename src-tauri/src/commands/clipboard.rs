@@ -12,8 +12,9 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::clipboard::{
     add_app_from_path, build_item_with_settings, delete_unreferenced_apps, detect_frontmost,
-    materialize_source, persist_and_notify, refresh_running_apps, sanitize_css_color, AppIconStore,
-    AppsRegistry, ClipboardReader, FileIconStore, ImageStore, WritebackGuard,
+    materialize_source, persist_and_notify, refresh_running_apps, sanitize_css_color,
+    write_edited_plain_text, AppIconStore, AppsRegistry, ClipboardPayload, ClipboardReader,
+    FileIconStore, ImageStore, TextPayload, WritebackGuard,
 };
 use crate::core::{AppError, Result};
 use crate::db::items::{
@@ -351,6 +352,269 @@ pub async fn get_clipboard_preview_payload(
     Ok(Some(payload))
 }
 
+/// 读取完整文本，不能用列表摘要冒充原文；HTML/RTF 使用原生纯文本表示。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditableClipboardText {
+    pub text: String,
+    pub plain_text_from_rich: bool,
+    /// 用于保存前 CAS 校验；其它地方改变内容时禁止静默覆盖。
+    pub content_hash: String,
+}
+
+fn editable_text_from_item(
+    item: &ClipboardItem,
+    redact_secrets: bool,
+) -> Result<EditableClipboardText> {
+    if item.kind != ClipboardKind::Text {
+        return Err(AppError::Clipboard(
+            "only text clipboard records can be edited".to_owned(),
+        ));
+    }
+    if item.is_sensitive && redact_secrets {
+        return Err(AppError::Clipboard(
+            "this sensitive record is hidden by the redaction setting".to_owned(),
+        ));
+    }
+    let rich = matches!(
+        item.sub_kind,
+        Some(ClipboardSubKind::Html | ClipboardSubKind::Rtf)
+    );
+    let content = if rich {
+        item.search_text.as_deref().ok_or_else(|| {
+            AppError::Clipboard("plain text representation of rich text is unavailable".to_owned())
+        })?
+    } else {
+        item.content.as_str()
+    };
+    Ok(EditableClipboardText {
+        text: content.to_owned(),
+        plain_text_from_rich: rich,
+        content_hash: item.content_hash.clone(),
+    })
+}
+
+fn validate_edited_text(text: &str) -> Result<()> {
+    if text.trim().is_empty() {
+        return Err(AppError::Clipboard(
+            "edited text cannot be empty".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+async fn check_edit_source(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    source_id: &str,
+) -> Result<EditableClipboardText> {
+    let item = find_item_by_id(pool, source_id)
+        .await?
+        .ok_or_else(|| AppError::Clipboard("original clipboard item not found".to_owned()))?;
+    let redact = app
+        .state::<SettingsStore>()
+        .snapshot()
+        .clipboard
+        .sensitive
+        .redact_secrets;
+    editable_text_from_item(&item, redact)
+}
+
+/// 编辑框读取专用：敏感遮罩开启时不能暴露完整明文。
+#[tauri::command]
+pub async fn get_editable_clipboard_text(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    source_id: String,
+) -> Result<EditableClipboardText> {
+    let pool = db.pool().await;
+    let editable = check_edit_source(&app, &pool, &source_id).await?;
+    // 编辑弹窗显示前关闭可能来自左右副面板的悬停预览，避免遮挡编辑器。
+    if let Err(error) = window::preview::close_clipboard_preview_now(&app) {
+        log::warn!("hide old preview before text edit failed: {error}");
+    }
+    Ok(editable)
+}
+
+/// 更新原历史内容（不新建记录），可选择保存后立即粘贴。
+/// 版本冲突和重复内容会拒绝保存，绝不覆盖其他历史条目。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateEditedClipboardInput {
+    pub source_id: String,
+    pub expected_hash: String,
+    pub text: String,
+    pub paste_after_save: bool,
+}
+
+#[tauri::command]
+pub async fn update_edited_clipboard_text(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    store: State<'_, ImageStore>,
+    guard: State<'_, Arc<WritebackGuard>>,
+    input: UpdateEditedClipboardInput,
+) -> Result<()> {
+    let UpdateEditedClipboardInput {
+        source_id,
+        expected_hash,
+        text,
+        paste_after_save,
+    } = input;
+    validate_edited_text(&text)?;
+    let pool = db.pool().await;
+    let original = find_item_by_id(&pool, &source_id)
+        .await?
+        .ok_or_else(|| AppError::Clipboard("original clipboard item not found".to_owned()))?;
+    let redact = app
+        .state::<SettingsStore>()
+        .snapshot()
+        .clipboard
+        .sensitive
+        .redact_secrets;
+    let editable = editable_text_from_item(&original, redact)?;
+    if original.content_hash != expected_hash {
+        return Err(AppError::Clipboard(
+            "original clipboard text changed; reopen the editor before saving".to_owned(),
+        ));
+    }
+    // 未修改的内容执行普通保存时直接成功；富文本也不会因此被转换为纯文本。
+    if text != editable.text {
+        let updated = prepare_edited_clipboard_item(&app, &store, &text)?;
+        crate::db::items::replace_item_text(&pool, &source_id, &expected_hash, &updated).await?;
+        if let Err(error) = app.emit(
+            CLIPBOARD_UPDATED_EVENT,
+            serde_json::json!({
+                "id": source_id,
+                "kind": ClipboardKind::Text,
+                "metadata": true
+            }),
+        ) {
+            log::warn!("notify text edit result failed: {error}");
+        }
+    }
+    if paste_after_save {
+        if let Err(error) = write_edited_plain_text(guard.inner().as_ref(), &text) {
+            return Err(AppError::Clipboard(format!(
+                "text was saved, but copying for paste failed: {error}"
+            )));
+        }
+        if let Err(error) = finish_paste(&app, true).await {
+            return Err(AppError::Clipboard(format!(
+                "text was saved, but automatic paste failed: {error}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// 临时复制编辑结果，只写系统剪贴板，不修改原历史。
+#[tauri::command]
+pub async fn copy_edited_clipboard_text(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    guard: State<'_, Arc<WritebackGuard>>,
+    source_id: String,
+    text: String,
+) -> Result<()> {
+    validate_edited_text(&text)?;
+    let pool = db.pool().await;
+    check_edit_source(&app, &pool, &source_id).await?;
+    write_edited_plain_text(guard.inner().as_ref(), &text)
+}
+
+/// 临时粘贴编辑结果，复用原有写回保护和系统粘贴，不新建历史记录。
+#[tauri::command]
+pub async fn paste_edited_clipboard_text(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    guard: State<'_, Arc<WritebackGuard>>,
+    source_id: String,
+    text: String,
+) -> Result<()> {
+    validate_edited_text(&text)?;
+    let pool = db.pool().await;
+    check_edit_source(&app, &pool, &source_id).await?;
+    write_edited_plain_text(guard.inner().as_ref(), &text)?;
+    finish_paste(&app, true).await
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveEditedClipboardTextResult {
+    pub id: String,
+    pub deduplicated: bool,
+}
+
+/// 另存为独立文本记录；保持原记录不变，沿用既有去重、密钥识别及更新事件。
+#[tauri::command]
+pub async fn save_edited_clipboard_text(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    store: State<'_, ImageStore>,
+    source_id: String,
+    text: String,
+) -> Result<SaveEditedClipboardTextResult> {
+    validate_edited_text(&text)?;
+    let pool = db.pool().await;
+    check_edit_source(&app, &pool, &source_id).await?;
+
+    let item = prepare_edited_clipboard_item(&app, &store, &text)?;
+    let result = persist_and_notify(&app, &pool, &item, None).await?;
+    Ok(SaveEditedClipboardTextResult {
+        id: result.id,
+        deduplicated: result.deduplicated,
+    })
+}
+
+/// 原位编辑和另存新记录共用同一个文本验证/草稿入口，避免数据语义不一致。
+fn prepare_edited_clipboard_item(
+    app: &AppHandle,
+    store: &ImageStore,
+    text: &str,
+) -> Result<ClipboardItem> {
+    validate_edited_text(text)?;
+    let settings = app.state::<SettingsStore>().snapshot();
+    // 校验完整输入长度，不以 trim 后长度替代（保留用户缩进/换行）。
+    if settings
+        .clipboard
+        .capture
+        .max_text_bytes()
+        .is_some_and(|max| text.len() as u64 > max)
+    {
+        return Err(AppError::Clipboard(
+            "edited text exceeds maximum text size".to_owned(),
+        ));
+    }
+    let mut capture = settings.clipboard.capture.clone();
+    capture.text = true; // 用户主动保存，不受后台自动采集开关影响。
+    let payload = ClipboardPayload::Text(TextPayload {
+        text: text.to_owned(),
+        html: None,
+        rtf: None,
+    });
+    let mut item = build_item_with_settings(
+        store,
+        &payload,
+        &capture,
+        &settings.clipboard.sensitive,
+        true,
+    )?
+    .ok_or_else(|| AppError::Clipboard("edited text exceeds capture/privacy limits".to_owned()))?;
+    apply_exact_edited_text(&mut item, text);
+    Ok(item)
+}
+
+/// 手动另存的内容必须与编辑框逐字一致，包括开头缩进和尾部换行。
+/// 普通监听仍保持既有 trim/去重语义；仅对用户主动编辑的新条目应用。
+fn apply_exact_edited_text(item: &mut ClipboardItem, text: &str) {
+    item.content = text.to_owned();
+    item.search_text = Some(text.to_owned());
+    item.summary = Some(text.trim().chars().take(256).collect());
+    item.content_hash = crate::db::items::content_hash(ClipboardKind::Text, text);
+    item.size = Some(text.len() as i64);
+}
+
 /// 播放一次复制成功提示音，用于偏好设置页试听。
 #[tauri::command]
 pub async fn play_copy_sound() {
@@ -381,7 +645,13 @@ pub async fn write_to_clipboard(
         should_write_plain_for_copy(plain, item.kind, settings.clipboard.content.copy_plain);
     let hide_after_copy = settings.clipboard.content.copy_then_hide_window;
 
-    crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, write_plain)?;
+    crate::clipboard::write_to_clipboard(
+        &store,
+        guard.inner().as_ref(),
+        &item,
+        write_plain,
+        Some(&app),
+    )?;
     mark_item_reused_if_enabled(&app, &pool, &id, item.kind).await?;
 
     if hide_after_copy {
@@ -420,17 +690,31 @@ pub async fn paste_clipboard_item(
         settings.clipboard.content.paste_files_as_path,
     );
 
-    crate::clipboard::write_to_clipboard(&store, guard.inner().as_ref(), &item, write_plain)?;
+    crate::clipboard::write_to_clipboard(
+        &store,
+        guard.inner().as_ref(),
+        &item,
+        write_plain,
+        Some(&app),
+    )?;
     mark_item_reused_if_enabled(&app, &pool, &id, item.kind).await?;
 
+    finish_paste(&app, false).await
+}
+
+/// 将编辑态恢复前台目标后沿用原系统粘贴动作，普通历史粘贴逻辑不变。
+async fn finish_paste(app: &AppHandle, restore_editor_focus: bool) -> Result<()> {
+    if restore_editor_focus {
+        window::set_clipboard_window_editing(app, CLIPBOARD_WINDOW_LABEL, false)?;
+    }
     if window::is_clipboard_window_pinned() {
         // 固定时窗口保持可见：macOS 上 panel 仍是 key window 会吞掉 ⌘V，需先 resign key
         // 让键焦点回到前台 App 的窗口；Windows 剪贴板窗口 focusable=false，无需处理。
         #[cfg(target_os = "macos")]
-        if let Err(err) = window::macos::resign_clipboard_panel_key(&app) {
+        if let Err(err) = window::macos::resign_clipboard_panel_key(app) {
             log::warn!("resign clipboard panel key before paste failed: {err:?}");
         }
-    } else if let Err(err) = window::hide_window(&app, CLIPBOARD_WINDOW_LABEL) {
+    } else if let Err(err) = window::hide_window(app, CLIPBOARD_WINDOW_LABEL) {
         log::warn!("hide clipboard window before paste failed: {err:?}");
     }
 
@@ -446,7 +730,7 @@ pub async fn paste_clipboard_item(
         #[cfg(target_os = "macos")]
         {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            if let Err(err) = window::macos::make_clipboard_panel_key(&app) {
+            if let Err(err) = window::macos::make_clipboard_panel_key(app) {
                 log::warn!("restore clipboard panel key after paste failed: {err:?}");
             }
         }
@@ -747,7 +1031,10 @@ fn compute_available_actions(item: &ClipboardItem) -> Vec<ClipboardAction> {
     actions.push(ClipboardAction::Paste);
 
     match item.kind {
-        ClipboardKind::Text => actions.push(ClipboardAction::PasteAsPlainText),
+        ClipboardKind::Text => {
+            actions.push(ClipboardAction::PasteAsPlainText);
+            actions.push(ClipboardAction::EditContent);
+        }
         ClipboardKind::Files => actions.push(ClipboardAction::PasteAsPath),
         ClipboardKind::Image => {}
     }
@@ -774,6 +1061,18 @@ fn compute_available_actions(item: &ClipboardItem) -> Vec<ClipboardAction> {
 
     actions.push(ClipboardAction::ToggleFavorite);
     actions.push(ClipboardAction::TogglePinned);
+    if item.is_pinned {
+        actions.push(ClipboardAction::PinFirst);
+        actions.push(ClipboardAction::PinLast);
+        actions.push(ClipboardAction::PinMoveTo);
+    } else if item.priority_order.is_some() {
+        actions.push(ClipboardAction::PriorityFirst);
+        actions.push(ClipboardAction::PriorityLast);
+        actions.push(ClipboardAction::PriorityMoveTo);
+        actions.push(ClipboardAction::PriorityCancel);
+    } else {
+        actions.push(ClipboardAction::AddPriority);
+    }
     actions.push(ClipboardAction::EditNote);
     actions.push(ClipboardAction::Delete);
 
@@ -1329,14 +1628,83 @@ pub async fn toggle_clipboard_item_favorite(
     crate::db::items::toggle_item_favorite(&pool, &id).await
 }
 
-/// 翻转置顶状态（薄封装）。不更新 `updated_at`，避免污染最近使用排序。
+/// 翻转置顶状态；置顶顺序由数据库层维护，不更新 `updated_at`。
 #[tauri::command]
 pub async fn toggle_clipboard_item_pinned(
+    app: AppHandle,
     db: State<'_, DatabaseState>,
     id: String,
 ) -> Result<bool> {
     let pool = db.pool().await;
-    crate::db::items::toggle_item_pinned(&pool, &id).await
+    let next = crate::db::items::toggle_item_pinned(&pool, &id).await?;
+    emit_clipboard_metadata_updated(&app, &id);
+    Ok(next)
+}
+
+/// 把普通历史加入手动排序末尾。
+#[tauri::command]
+pub async fn add_clipboard_item_priority(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    id: String,
+) -> Result<i64> {
+    let pool = db.pool().await;
+    let order = crate::db::items::add_item_priority(&pool, &id).await?;
+    emit_clipboard_metadata_updated(&app, &id);
+    Ok(order)
+}
+
+/// 移动普通手动排序项到指定位置；小于 1 归一到 1，超出范围归一到末尾。
+#[tauri::command]
+pub async fn move_clipboard_item_priority(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    id: String,
+    position: i64,
+) -> Result<i64> {
+    let pool = db.pool().await;
+    let order = crate::db::items::move_item_priority(&pool, &id, position).await?;
+    emit_clipboard_metadata_updated(&app, &id);
+    Ok(order)
+}
+
+/// 取消普通手动排序。
+#[tauri::command]
+pub async fn cancel_clipboard_item_priority(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    id: String,
+) -> Result<()> {
+    let pool = db.pool().await;
+    crate::db::items::cancel_item_priority(&pool, &id).await?;
+    emit_clipboard_metadata_updated(&app, &id);
+    Ok(())
+}
+
+/// 移动置顶项到指定位置。
+#[tauri::command]
+pub async fn move_pinned_clipboard_item(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    id: String,
+    position: i64,
+) -> Result<i64> {
+    let pool = db.pool().await;
+    let order = crate::db::items::move_pinned_item(&pool, &id, position).await?;
+    emit_clipboard_metadata_updated(&app, &id);
+    Ok(order)
+}
+
+fn emit_clipboard_metadata_updated(app: &AppHandle, id: &str) {
+    if let Err(err) = app.emit(
+        CLIPBOARD_UPDATED_EVENT,
+        serde_json::json!({
+            "id": id,
+            "metadata": true,
+        }),
+    ) {
+        log::warn!("emit {CLIPBOARD_UPDATED_EVENT} after metadata update failed: {err}");
+    }
 }
 
 /// 删除单条记录（薄封装）。若删的是图片记录，连带删除其落盘文件（原图 + 缩略图）。
@@ -1539,271 +1907,3 @@ fn validate_image_file_name(file_name: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::db::items::content_hash;
-    use crate::db::models::Platform;
-    use chrono::Utc;
-
-    fn text_item(sub_kind: Option<ClipboardSubKind>, is_sensitive: bool) -> ClipboardItem {
-        let content = "<b>secret</b>".to_owned();
-
-        ClipboardItem {
-            id: "item".to_owned(),
-            kind: ClipboardKind::Text,
-            sub_kind,
-            group_id: None,
-            source_app_id: None,
-            content_hash: content_hash(ClipboardKind::Text, &content),
-            content,
-            search_text: None,
-            summary: None,
-            file_types: None,
-            size: None,
-            width: None,
-            height: None,
-            use_count: 1,
-            is_favorite: false,
-            is_pinned: false,
-            is_sensitive,
-            platform: Platform::Macos,
-            note: None,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            source_app_name: None,
-            source_app_icon_file: None,
-            source_app_icon_path: None,
-            image_thumbnail_path: None,
-            file_entries: None,
-            files_preview_kind: None,
-            available_actions: Vec::new(),
-            color_preview: None,
-            display_created_at: String::new(),
-        }
-    }
-
-    fn image_item() -> ClipboardItem {
-        let content = "abcdef0123.png".to_owned();
-        let mut item = text_item(None, false);
-
-        item.kind = ClipboardKind::Image;
-        item.content_hash = content_hash(ClipboardKind::Image, &content);
-        item.content = content;
-        item
-    }
-
-    #[test]
-    fn copy_plain_default_only_affects_text_items() {
-        assert!(should_write_plain_for_copy(
-            false,
-            ClipboardKind::Text,
-            true
-        ));
-        assert!(!should_write_plain_for_copy(
-            false,
-            ClipboardKind::Files,
-            true
-        ));
-        assert!(!should_write_plain_for_copy(
-            false,
-            ClipboardKind::Image,
-            true
-        ));
-        assert!(!should_write_plain_for_copy(
-            false,
-            ClipboardKind::Text,
-            false
-        ));
-    }
-
-    #[test]
-    fn force_plain_copy_overrides_item_kind() {
-        assert!(should_write_plain_for_copy(
-            true,
-            ClipboardKind::Files,
-            false
-        ));
-        assert!(should_write_plain_for_copy(
-            true,
-            ClipboardKind::Image,
-            false
-        ));
-    }
-
-    #[test]
-    fn paste_plain_defaults_follow_item_kind() {
-        assert!(should_write_plain_for_paste(
-            false,
-            ClipboardKind::Text,
-            true,
-            false,
-        ));
-        assert!(should_write_plain_for_paste(
-            false,
-            ClipboardKind::Files,
-            false,
-            true,
-        ));
-        assert!(!should_write_plain_for_paste(
-            false,
-            ClipboardKind::Files,
-            true,
-            false,
-        ));
-        assert!(!should_write_plain_for_paste(
-            false,
-            ClipboardKind::Image,
-            true,
-            true,
-        ));
-    }
-
-    #[test]
-    fn force_plain_paste_overrides_item_kind() {
-        assert!(should_write_plain_for_paste(
-            true,
-            ClipboardKind::Image,
-            false,
-            false,
-        ));
-    }
-
-    #[test]
-    fn mask_sensitive_text_replaces_middle_with_stars() {
-        assert_eq!(
-            mask_sensitive_text("sk-abcdefghijklmnopqrstuvwxyzABCDE1234567890"),
-            "sk-a********7890"
-        );
-    }
-
-    #[test]
-    fn mask_sensitive_text_replaces_short_lines_fully() {
-        assert_eq!(mask_sensitive_text("secret"), "******");
-    }
-
-    #[test]
-    fn mask_sensitive_text_masks_each_line() {
-        assert_eq!(
-            mask_sensitive_text("abcd1234xyz\nshort"),
-            "abcd***4xyz\n*****"
-        );
-    }
-
-    #[test]
-    fn redact_sensitive_list_item_masks_summary_when_enabled() {
-        let mut item = text_item(None, true);
-        item.summary = Some("sk-abcdefghijklmnopqrstuvwxyzABCDE1234567890".to_owned());
-
-        redact_sensitive_list_item(&mut item, true);
-
-        assert_eq!(item.summary.as_deref(), Some("sk-a********7890"));
-    }
-
-    #[test]
-    fn redact_sensitive_list_item_keeps_summary_when_disabled() {
-        let mut item = text_item(None, true);
-        item.summary = Some("sk-abcdefghijklmnopqrstuvwxyzABCDE1234567890".to_owned());
-
-        redact_sensitive_list_item(&mut item, false);
-
-        assert_eq!(
-            item.summary.as_deref(),
-            Some("sk-abcdefghijklmnopqrstuvwxyzABCDE1234567890")
-        );
-    }
-
-    #[test]
-    fn preview_sub_kind_drops_sensitive_text_subtype_when_redacted() {
-        let item = text_item(Some(ClipboardSubKind::Html), true);
-
-        assert_eq!(preview_sub_kind(&item, true), None);
-    }
-
-    #[test]
-    fn preview_sub_kind_keeps_sensitive_text_subtype_when_not_redacted() {
-        let item = text_item(Some(ClipboardSubKind::Html), true);
-
-        assert_eq!(preview_sub_kind(&item, false), Some(ClipboardSubKind::Html));
-    }
-
-    #[test]
-    fn preview_sub_kind_keeps_regular_text_subtype() {
-        let item = text_item(Some(ClipboardSubKind::Html), false);
-
-        assert_eq!(preview_sub_kind(&item, true), Some(ClipboardSubKind::Html));
-    }
-
-    #[test]
-    fn preview_text_keeps_plain_text_content() {
-        let mut item = text_item(None, false);
-        item.content = "plain text".to_owned();
-
-        assert_eq!(preview_text(&item, false), "plain text");
-    }
-
-    #[test]
-    fn preview_text_uses_search_text_for_html() {
-        let mut item = text_item(Some(ClipboardSubKind::Html), false);
-        item.content = "<b>Hello</b> World".to_owned();
-        item.search_text = Some("Hello World".to_owned());
-
-        assert_eq!(preview_text(&item, false), "Hello World");
-    }
-
-    #[test]
-    fn preview_text_uses_search_text_for_rtf() {
-        let mut item = text_item(Some(ClipboardSubKind::Rtf), false);
-        item.content = r"{\rtf1 Hello World}".to_owned();
-        item.search_text = Some("Hello World".to_owned());
-
-        assert_eq!(preview_text(&item, false), "Hello World");
-    }
-
-    #[test]
-    fn preview_text_masks_sensitive_plain_source() {
-        let mut item = text_item(Some(ClipboardSubKind::Html), true);
-        item.content = "<b>sk-abcdefghijklmnopqrstuvwxyzABCDE1234567890</b>".to_owned();
-        item.search_text = Some("sk-abcdefghijklmnopqrstuvwxyzABCDE1234567890".to_owned());
-
-        assert_eq!(preview_text(&item, true), "sk-a********7890");
-    }
-
-    #[test]
-    fn image_actions_include_save_image() {
-        let actions = compute_available_actions(&image_item());
-
-        assert!(actions.contains(&ClipboardAction::SaveImage));
-    }
-
-    #[test]
-    fn text_actions_do_not_include_save_image() {
-        let actions = compute_available_actions(&text_item(None, false));
-
-        assert!(!actions.contains(&ClipboardAction::SaveImage));
-    }
-
-    #[test]
-    fn accepts_plain_png_file_name() {
-        assert!(validate_image_file_name("abcdef0123.png").is_ok());
-    }
-
-    #[test]
-    fn rejects_traversal_and_subpaths() {
-        for bad in [
-            "",
-            "evil.txt",
-            "../secret.png",
-            "..\\secret.png",
-            "sub/dir.png",
-            "a/b.png",
-            "/abs.png",
-            "name..png", // 含 ".." 序列，保守拒绝
-        ] {
-            assert!(
-                validate_image_file_name(bad).is_err(),
-                "should reject: {bad:?}"
-            );
-        }
-    }
-}

@@ -522,6 +522,21 @@ export const preferenceTabs: PreferenceTab[] = [
               return settings.clipboard.preview.spaceEnabled;
             },
           },
+          {
+            control: { max: 100, min: 50, step: 5, type: "slider" },
+            id: "preview.backgroundOpacity",
+            keywords: [
+              "preview",
+              "opacity",
+              "background",
+              "transparent",
+              "readability",
+            ],
+            path: ["clipboard", "preview", "backgroundOpacity"],
+            value: (settings) => {
+              return settings.clipboard.preview.backgroundOpacity;
+            },
+          },
         ],
       },
       {

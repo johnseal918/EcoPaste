@@ -21,6 +21,10 @@ import {
   type UseClipboardPreviewControllerOptions,
   type WindowVisibilityPayload,
 } from "./previewController";
+import {
+  canStartPreviewOpen,
+  PREVIEW_OPEN_FAILURE_COOLDOWN_MS,
+} from "./previewRequestPolicy";
 
 const KEYBOARD_PREVIEW_MAX_FRAMES = 36;
 const KEYBOARD_PREVIEW_STABLE_FRAMES = 2;
@@ -46,7 +50,8 @@ interface KeyboardPreviewTarget {
 export function useClipboardPreviewController(
   options: UseClipboardPreviewControllerOptions,
 ) {
-  const { getActiveItem, itemElementMapRef, onHoverSelect } = options;
+  const { getActiveItem, itemElementMapRef, onHoverSelect, sourceWindowLabel } =
+    options;
   const [previewSession, setPreviewSession] = useState<PreviewSession | null>(
     null,
   );
@@ -55,6 +60,11 @@ export function useClipboardPreviewController(
   const clipboardWindowVisibleRef = useRef(true);
   const previewSessionRef = useRef<PreviewSession | null>(null);
   const previewOpenRequestIdRef = useRef(0);
+  const previewOpenInFlightRef = useRef<{
+    itemId: string;
+    requestId: number;
+  } | null>(null);
+  const previewOpenRetryAfterRef = useRef(0);
   const previewMoveFrameRef = useRef<number | null>(null);
   const previewMoveTargetRef = useRef<{
     item: ClipboardItem;
@@ -75,7 +85,7 @@ export function useClipboardPreviewController(
       clearHoverTimer(hoverHideTimerRef);
       previewSessionRef.current = null;
       setPreviewSession(null);
-      closeClipboardPreviewSilently("hoverDisabled");
+      closeClipboardPreviewSilently("hoverDisabled", sourceWindowLabel);
       return;
     }
 
@@ -87,12 +97,13 @@ export function useClipboardPreviewController(
       clearHoverTimer(hoverHideTimerRef);
       previewSessionRef.current = null;
       setPreviewSession(null);
-      closeClipboardPreviewSilently("spaceDisabled");
+      closeClipboardPreviewSilently("spaceDisabled", sourceWindowLabel);
     }
   }, [
     previewSettings.hoverEnabled,
     previewSettings.spaceEnabled,
     previewSession?.trigger,
+    sourceWindowLabel,
   ]);
 
   useEffect(() => {
@@ -100,6 +111,7 @@ export function useClipboardPreviewController(
       clearHoverTimer(hoverTimerRef);
       clearHoverTimer(hoverHideTimerRef);
       pendingHoverTargetRef.current = null;
+      previewOpenInFlightRef.current = null;
       if (keyboardPreviewFrameRef.current !== null) {
         window.cancelAnimationFrame(keyboardPreviewFrameRef.current);
         keyboardPreviewFrameRef.current = null;
@@ -150,7 +162,7 @@ export function useClipboardPreviewController(
     cancelPreviewMoveFrame();
     cancelKeyboardPreviewFrame();
     commitPreviewSession(null);
-    closeClipboardPreviewSilently(reason);
+    closeClipboardPreviewSilently(reason, sourceWindowLabel);
   };
 
   /**
@@ -351,6 +363,16 @@ export function useClipboardPreviewController(
     pointerY?: number,
   ) => {
     if (!clipboardWindowVisibleRef.current) return;
+    if (
+      !canStartPreviewOpen(
+        item.id,
+        previewOpenInFlightRef.current?.itemId ?? null,
+        previewOpenRetryAfterRef.current,
+        Date.now(),
+      )
+    ) {
+      return;
+    }
 
     const element = itemElementMapRef.current.get(item.id);
     const rect = element?.getBoundingClientRect();
@@ -359,18 +381,23 @@ export function useClipboardPreviewController(
 
     const requestId = previewOpenRequestIdRef.current + 1;
     previewOpenRequestIdRef.current = requestId;
+    previewOpenInFlightRef.current = { itemId: item.id, requestId };
     commitPreviewSession({ itemId: item.id, trigger });
 
     try {
       if (!clipboardWindowVisibleRef.current) return;
 
-      const state = await showClipboardPreview(item.id, {
-        height: rect.height,
-        left: rect.left,
-        pointerY,
-        top: rect.top,
-        width: rect.width,
-      });
+      const state = await showClipboardPreview(
+        item.id,
+        {
+          height: rect.height,
+          left: rect.left,
+          pointerY,
+          top: rect.top,
+          width: rect.width,
+        },
+        sourceWindowLabel,
+      );
 
       if (requestId !== previewOpenRequestIdRef.current) return;
       if (!state || !clipboardWindowVisibleRef.current) {
@@ -378,10 +405,16 @@ export function useClipboardPreviewController(
       }
     } catch (error) {
       if (requestId === previewOpenRequestIdRef.current) {
+        previewOpenRetryAfterRef.current =
+          Date.now() + PREVIEW_OPEN_FAILURE_COOLDOWN_MS;
         log.error("show clipboard preview failed", { error, trigger });
         commitPreviewSession(null);
       }
       return;
+    } finally {
+      if (previewOpenInFlightRef.current?.requestId === requestId) {
+        previewOpenInFlightRef.current = null;
+      }
     }
   };
 

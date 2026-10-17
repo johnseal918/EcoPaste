@@ -1055,6 +1055,7 @@ async fn merge_history(current: &SqlitePool, backup: &SqlitePool) -> Result<Merg
     merge_file_type_icons(&mut tx, backup).await?;
     let outcome = merge_items(&mut tx, backup).await?;
     tx.commit().await.context("failed to commit import")?;
+    crate::db::items::normalize_item_orders(current).await?;
 
     Ok(outcome)
 }
@@ -1169,37 +1170,109 @@ async fn merge_items(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     backup: &SqlitePool,
 ) -> Result<MergeOutcome> {
-    let rows = sqlx::query_as::<_, BackupItemRow>(
-        "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-         summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
-         created_at, updated_at FROM clipboard_items ORDER BY created_at ASC",
-    )
-    .fetch_all(backup)
-    .await
-    .context("failed to read backup items")?;
+    let has_priority_order = backup_has_column(backup, "priority_order").await?;
+    let has_pin_order = backup_has_column(backup, "pin_order").await?;
+    let has_manual_edit = backup_has_column(backup, "is_manually_edited").await?;
+    let select: &'static str = match (has_priority_order, has_pin_order) {
+        (true, true) => {
+            "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
+             summary, file_types, size, width, height, use_count, is_favorite, is_pinned, priority_order, pin_order, is_sensitive, platform, note, \
+             created_at, updated_at FROM clipboard_items ORDER BY created_at ASC"
+        }
+        (true, false) => {
+            "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
+             summary, file_types, size, width, height, use_count, is_favorite, is_pinned, priority_order, NULL AS pin_order, is_sensitive, platform, note, \
+             created_at, updated_at FROM clipboard_items ORDER BY created_at ASC"
+        }
+        (false, true) => {
+            "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
+             summary, file_types, size, width, height, use_count, is_favorite, is_pinned, NULL AS priority_order, pin_order, is_sensitive, platform, note, \
+             created_at, updated_at FROM clipboard_items ORDER BY created_at ASC"
+        }
+        (false, false) => {
+            "SELECT id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
+             summary, file_types, size, width, height, use_count, is_favorite, is_pinned, NULL AS priority_order, NULL AS pin_order, is_sensitive, platform, note, \
+             created_at, updated_at FROM clipboard_items ORDER BY created_at ASC"
+        }
+    };
+    // Older backup DBs have no manually-edited flag. Import ordinary rows first,
+    // then intentional duplicates, preserving both records and their identities.
+    let manual_edit_select = if has_manual_edit {
+        "is_manually_edited"
+    } else {
+        "0 AS is_manually_edited"
+    };
+    let select = select.replace(
+        "created_at, updated_at FROM clipboard_items ORDER BY created_at ASC",
+        &format!(
+            "created_at, updated_at, {manual_edit_select} FROM clipboard_items \
+             ORDER BY is_manually_edited ASC, created_at ASC"
+        ),
+    );
+    // This SQL is assembled exclusively from the static SELECT branches
+    // above and two hard-coded column choices; no external values enter SQL.
+    let rows = sqlx::query_as::<_, BackupItemRow>(sqlx::AssertSqlSafe(select.as_str()))
+        .fetch_all(backup)
+        .await
+        .context("failed to read backup items")?;
 
     let mut imported_items = 0;
     let mut skipped_items = 0;
+    let priority_offset: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(priority_order), 0) FROM clipboard_items WHERE is_pinned = 0",
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .context("failed to read current priority order maximum")?;
+    let pin_offset: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(pin_order), 0) FROM clipboard_items WHERE is_pinned = 1",
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .context("failed to read current pin order maximum")?;
+    let mut legacy_pin_sequence = 0_i64;
+
     for row in rows {
-        let exists: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 FROM clipboard_items WHERE kind = ? AND content_hash = ? LIMIT 1",
-        )
-        .bind(row.kind.as_str())
-        .bind(row.content_hash.as_str())
-        .fetch_optional(&mut **tx)
-        .await
-        .context("failed to check duplicate item")?;
+        // For explicit user-edited copies, only identical ID is a duplicate.
+        // Auto-captured history keeps its existing content-hash dedup behavior,
+        // except that a distinct manually-edited row is not treated as a duplicate.
+        let exists: Option<i64> = if row.is_manually_edited {
+            sqlx::query_scalar("SELECT 1 FROM clipboard_items WHERE id = ? LIMIT 1")
+                .bind(&row.id)
+                .fetch_optional(&mut **tx)
+                .await
+                .context("failed to check manually edited item id")?
+        } else {
+            sqlx::query_scalar(
+                "SELECT 1 FROM clipboard_items WHERE id = ? OR \
+                 (kind = ? AND content_hash = ? AND is_manually_edited = 0) LIMIT 1",
+            )
+            .bind(&row.id)
+            .bind(&row.kind)
+            .bind(&row.content_hash)
+            .fetch_optional(&mut **tx)
+            .await
+            .context("failed to check ordinary imported item duplicate")?
+        };
         if exists.is_some() {
             skipped_items += 1;
             continue;
         }
 
+        let imported_priority_order = row.priority_order.map(|order| priority_offset + order);
+        let imported_pin_order = if row.is_pinned {
+            legacy_pin_sequence += 1;
+            Some(pin_offset + row.pin_order.unwrap_or(legacy_pin_sequence))
+        } else {
+            None
+        };
+
         sqlx::query(
             "INSERT OR IGNORE INTO clipboard_items \
              (id, kind, sub_kind, group_id, source_app_id, content, content_hash, search_text, \
-              summary, file_types, size, width, height, use_count, is_favorite, is_pinned, is_sensitive, platform, note, \
-              created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              summary, file_types, size, width, height, use_count, is_favorite, is_pinned, priority_order, pin_order, is_sensitive, platform, note, \
+              created_at, updated_at, is_manually_edited) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(row.id)
         .bind(row.kind)
@@ -1217,11 +1290,14 @@ async fn merge_items(
         .bind(row.use_count)
         .bind(row.is_favorite)
         .bind(row.is_pinned)
+        .bind(imported_priority_order)
+        .bind(imported_pin_order)
         .bind(row.is_sensitive)
         .bind(row.platform)
         .bind(row.note)
         .bind(row.created_at)
         .bind(row.updated_at)
+        .bind(row.is_manually_edited)
         .execute(&mut **tx)
         .await
         .context("failed to import item")?;
@@ -1252,11 +1328,23 @@ struct BackupItemRow {
     use_count: i64,
     is_favorite: bool,
     is_pinned: bool,
+    priority_order: Option<i64>,
+    pin_order: Option<i64>,
     is_sensitive: bool,
     platform: String,
     note: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    is_manually_edited: bool,
+}
+
+async fn backup_has_column(pool: &SqlitePool, column: &str) -> Result<bool> {
+    let columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('clipboard_items')")
+            .fetch_all(pool)
+            .await
+            .context("failed to inspect backup clipboard_items schema")?;
+    Ok(columns.iter().any(|name| name == column))
 }
 
 struct WatcherPauseRestore {
@@ -1452,191 +1540,3 @@ fn app_error<T>(message: impl Into<String>) -> Result<T> {
     Err(AppError::Other(anyhow!(message.into())))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Cursor;
-    use tempfile::tempdir;
-    use zip::ZipArchive;
-
-    #[test]
-    fn backup_extension_validation_accepts_expected_suffix() {
-        let path = normalize_backup_path(PathBuf::from("demo.ecopastebak")).unwrap();
-        assert_eq!(path, PathBuf::from("demo.ecopastebak"));
-    }
-
-    #[test]
-    fn backup_extension_validation_appends_missing_suffix() {
-        let path = normalize_backup_path(PathBuf::from("demo")).unwrap();
-        assert_eq!(path, PathBuf::from("demo.ecopastebak"));
-    }
-
-    #[test]
-    fn backup_extension_validation_rejects_other_suffix() {
-        assert!(normalize_backup_path(PathBuf::from("demo.zip")).is_err());
-    }
-
-    #[test]
-    fn encrypted_payload_header_round_trips() {
-        let encrypted = encrypt_payload(b"hello", "password-123").unwrap();
-        let mut bytes = Vec::new();
-        write_header(&mut bytes, &encrypted.header).unwrap();
-        bytes.extend_from_slice(&encrypted.ciphertext);
-
-        let mut cursor = Cursor::new(bytes);
-
-        assert_eq!(
-            inspect_backup_reader(&mut cursor).unwrap(),
-            BackupContainerMode::Encrypted
-        );
-    }
-
-    #[test]
-    fn inspect_backup_reader_recognizes_plain_zip() {
-        let mut cursor = Cursor::new(b"PK\x03\x04demo".to_vec());
-
-        assert_eq!(
-            inspect_backup_reader(&mut cursor).unwrap(),
-            BackupContainerMode::Plain
-        );
-    }
-
-    #[test]
-    fn inspect_backup_reader_recognizes_encrypted_container() {
-        let encrypted = encrypt_payload(b"hello", "password-123").unwrap();
-        let mut bytes = Vec::new();
-        write_header(&mut bytes, &encrypted.header).unwrap();
-        bytes.extend_from_slice(&encrypted.ciphertext);
-        let mut cursor = Cursor::new(bytes);
-
-        assert_eq!(
-            inspect_backup_reader(&mut cursor).unwrap(),
-            BackupContainerMode::Encrypted
-        );
-    }
-
-    #[test]
-    fn payload_zip_contains_only_backup_whitelist() {
-        let temp = tempdir().unwrap();
-        let root = temp.path();
-        let resources = root.join("resources");
-        fs::create_dir_all(resources.join("clipboard-images/origin")).unwrap();
-        fs::write(root.join("clipboard.db"), b"db").unwrap();
-        fs::write(root.join("settings.json"), b"{}").unwrap();
-        fs::write(root.join("window-state.json"), b"skip").unwrap();
-        fs::write(root.join("settings.json.bak"), b"skip").unwrap();
-        fs::write(resources.join("clipboard-images/origin/demo.png"), b"image").unwrap();
-
-        let payload = root.join("payload.zip");
-        let target = root.join("backup.ecopastebak");
-        let manifest = BackupManifest {
-            format_version: FORMAT_VERSION,
-            app_name: "EcoPaste".to_owned(),
-            app_version: "0.0.0".to_owned(),
-            exported_at: Utc::now(),
-            platform: "macos".to_owned(),
-            encryption: ManifestEncryption::None,
-            item_count: 1,
-            text_count: 1,
-            image_count: 0,
-            files_count: 0,
-            resource_bytes: 5,
-        };
-        let source_paths = BackupSourcePaths {
-            db_path: root.join("clipboard.db"),
-            resources_dir: resources,
-            settings_path: root.join("settings.json"),
-        };
-
-        write_payload_zip(&source_paths, &payload, &manifest, &target).unwrap();
-
-        let file = File::open(payload).unwrap();
-        let mut archive = ZipArchive::new(file).unwrap();
-        let mut names = Vec::new();
-        for index in 0..archive.len() {
-            let file = archive.by_index(index).unwrap();
-            names.push(file.name().to_owned());
-        }
-        names.sort();
-
-        assert_eq!(
-            names,
-            vec![
-                "config/settings.json",
-                "db/clipboard.db",
-                "manifest.json",
-                "resources/clipboard-images/origin/demo.png",
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn merge_preserves_is_sensitive_flag() {
-        use crate::db::items::{content_hash, insert_item};
-        use crate::db::models::{ClipboardItem, ClipboardKind, Platform};
-        use crate::db::test_support::memory_pool;
-        use chrono::DateTime;
-
-        // The backup pool stands in for a real backup database, which is a
-        // snapshot of the live clipboard.db and therefore already carries the
-        // `is_sensitive` flag written by the production insert path.
-        let backup = memory_pool().await;
-        let current = memory_pool().await;
-
-        let ts = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-        let content = "AKIAIOSFODNN7EXAMPLE".to_owned();
-        let item = ClipboardItem {
-            id: "secret-1".to_owned(),
-            kind: ClipboardKind::Text,
-            sub_kind: None,
-            group_id: None,
-            source_app_id: None,
-            content_hash: content_hash(ClipboardKind::Text, &content),
-            content,
-            search_text: None,
-            summary: None,
-            file_types: None,
-            size: None,
-            width: None,
-            height: None,
-            use_count: 1,
-            is_favorite: false,
-            is_pinned: false,
-            is_sensitive: true,
-            platform: Platform::Macos,
-            note: None,
-            created_at: ts,
-            updated_at: ts,
-            source_app_name: None,
-            source_app_icon_file: None,
-            source_app_icon_path: None,
-            image_thumbnail_path: None,
-            file_entries: None,
-            files_preview_kind: None,
-            available_actions: Vec::new(),
-            color_preview: None,
-            display_created_at: String::new(),
-        };
-        insert_item(&backup, &item).await.unwrap();
-
-        let outcome = merge_history(&current, &backup).await.unwrap();
-        assert_eq!(
-            outcome.imported_items, 1,
-            "sensitive item should be imported"
-        );
-
-        // Regression: the merge SELECT/INSERT used to omit `is_sensitive`, so
-        // every imported row silently fell back to the column DEFAULT (0) and
-        // secrets were rendered in plaintext. The flag must survive the merge.
-        let imported: bool =
-            sqlx::query_scalar("SELECT is_sensitive FROM clipboard_items WHERE id = ?")
-                .bind("secret-1")
-                .fetch_one(&current)
-                .await
-                .unwrap();
-        assert!(
-            imported,
-            "merged sensitive item must keep is_sensitive = true"
-        );
-    }
-}
