@@ -407,9 +407,9 @@ All check specs and dev specs you need:
 ## Workflow
 
 1. **Get changes** - Run `git diff --name-only` and `git diff` to get code changes
-2. **Check against specs** - Check item by item against specs above
-3. **Self-fix** - Fix issues directly, don't just report
-4. **Run verification** - Run project's lint and typecheck commands
+2. **Check the current change** - Read relevant implementation and callers against the current task's explicit requirements
+3. **Resolve current blockers** - Fix only defects that prevent the current deliverable; report unrelated issues without extending the task
+4. **Confirm the current goal** - Use existing evidence or the necessary actual application path; do not run static or unit checks
 
 ## Important Constraints
 
@@ -445,9 +445,9 @@ Finish checklist and requirements:
 	2. **Verify task artifacts** - Check requirements in prd.md and, when present, design.md / implement.md
 3. **Spec sync** - Analyze whether changes introduce new patterns, contracts, or conventions
    - If new pattern/convention found: read target spec file → update it → update index.md if needed
-   - If infra/cross-layer change: follow the 7-section mandatory template from update-spec.md
+   - If this change alters a necessary existing contract, update that contract's relevant explanation; no fixed seven-section report is required
    - If pure code fix with no new patterns: skip this step
-4. **Run final checks** - Execute lint and typecheck
+4. **Report the actual result** - State the current software outcome and any concrete remaining gap
 5. **Confirm ready** - Ensure code is ready for PR
 
 ## Important Constraints

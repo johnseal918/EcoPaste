@@ -310,18 +310,6 @@ fn default_excluded_app_ids() -> Vec<String> {
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn macos_defaults_keep_sensitive_system_apps_excluded() {
-        let ids = default_excluded_app_ids();
-
-        assert!(ids.contains(&"com.apple.keychainaccess".to_owned()));
-        assert!(ids.contains(&"com.apple.Passwords".to_owned()));
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]

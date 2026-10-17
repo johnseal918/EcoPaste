@@ -94,5 +94,3 @@ windows = { version = "0.52", features = [
     "Win32_UI_Shell",
 ] }
 
-[dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }

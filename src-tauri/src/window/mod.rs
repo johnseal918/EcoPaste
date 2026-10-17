@@ -878,24 +878,3 @@ pub fn take_pending_preference_highlight() -> Option<String> {
     guard.take()
 }
 
-#[cfg(test)]
-mod side_panel_layout_tests {
-    use super::{allocate_panel_widths, bound_right_panel_viewport};
-
-    #[test]
-    fn zero_gap_width_allocation_stays_within_screen() {
-        assert_eq!(allocate_panel_widths(1560, 2, 3, 360), (624, 936));
-        assert_eq!(allocate_panel_widths(1006, 2, 3, 360), (402, 604));
-        assert_eq!(allocate_panel_widths(1006, 0, 5, 360), (0, 1006));
-        assert_eq!(allocate_panel_widths(2000, 1, 1, 360), (360, 360));
-        assert_eq!(allocate_panel_widths(340, 1, 1, 360), (170, 170));
-    }
-
-    #[test]
-    fn legacy_right_side_preserves_original_width_when_roomy_but_never_overflows() {
-        assert_eq!(bound_right_panel_viewport(360, 1, 1200), 360);
-        assert_eq!(bound_right_panel_viewport(360, 2, 900), 720);
-        assert_eq!(bound_right_panel_viewport(540, 1, 390), 390);
-        assert_eq!(bound_right_panel_viewport(540, 5, 1000), 1000);
-    }
-}

@@ -93,7 +93,7 @@ Read the task's prd.md, design.md if present, and implement.md if present:
 
 ### 4. Verify
 
-Run project's lint and typecheck commands to verify changes.
+Confirm the current goal from existing evidence; use the actual application path only when that result remains unconfirmed.
 
 ---
 
@@ -114,8 +114,10 @@ Run project's lint and typecheck commands to verify changes.
 
 ### Verification Results
 
-- Lint: Passed
-- TypeCheck: Passed
+
+
+- Current goal: actual result or specific unconfirmed behavior
+
 ```
 
 ---

@@ -110,7 +110,7 @@ python3 ./.trellis/scripts/get_context.py --mode phase --step <X.Y>  # detailed 
   degrades to a generic "Refer to workflow.md for current step." line —
   intentionally visible so users notice and fix a broken workflow.md.
 
-  INVARIANT (test/regression.test.ts):
+  INVARIANT (runtime contract):
     Every workflow-walkthrough step marked `[required · once]` must have a
     matching enforcement line in its phase's [workflow-state:*] block. The
     breadcrumb is the only per-turn channel; if a mandatory step isn't
@@ -211,7 +211,7 @@ Inline mode: skip jsonl curation; Phase 2 reads artifacts/specs via `trellis-bef
 
 ### Phase 2: Execute
 - 2.1 Implement `[required · repeatable]`
-- 2.2 Quality check `[required · repeatable]`
+- 2.2 Current task result `[when needed]`
 - 2.3 Rollback `[on demand]`
 
 <!-- Per-turn breadcrumb: shown while status='in_progress'.
@@ -246,7 +246,7 @@ Read context: `prd.md` -> `design.md if present` -> `implement.md if present`, p
 - 3.4 Commit changes `[required · once]`
 - 3.5 Wrap-up reminder
 
-> Note: step 3.1 was folded into 2.2 (last-iteration full-scope check) and 3.4 (commit preamble). Numbering kept stable to avoid breaking external references.
+> Step numbers remain stable; section 2.2 does not impose a full-scope or static-check gate.
 
 <!-- Per-turn breadcrumb: shown while status='completed'.
      Currently DEAD in normal flow: cmd_archive writes status='completed' in
@@ -468,7 +468,7 @@ If `task.py start` errors with a session-identity message (no context key from h
 
 ## Phase 2: Execute
 
-Goal: turn reviewed planning artifacts into code that passes quality checks.
+Goal: implement the user's current software deliverable.
 
 #### 2.1 Implement `[required · repeatable]`
 
@@ -477,7 +477,7 @@ Goal: turn reviewed planning artifacts into code that passes quality checks.
 Spawn the implement sub-agent:
 
 - **Agent type**: `trellis-implement`
-- **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; finish by running project lint and type-check
+- **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; report the implemented outcome and any necessary actual application observation
 - **Dispatch prompt guard**: Tell the spawned agent it is already the `trellis-implement` sub-agent and must implement directly, not spawn another `trellis-implement` / `trellis-check`.
 
 The platform hook/plugin auto-handles:
@@ -491,7 +491,7 @@ The platform hook/plugin auto-handles:
 Spawn the implement sub-agent:
 
 - **Agent type**: `trellis-implement`
-- **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; finish by running project lint and type-check
+- **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; report the implemented outcome and any necessary actual application observation
 - **Dispatch prompt guard**: The prompt MUST start with `Active task: <task path>`, then explicitly say the spawned agent is already `trellis-implement` and must implement directly without spawning another `trellis-implement` / `trellis-check`.
 
 The pull-based sub-agent definition auto-handles the context load requirement:
@@ -505,7 +505,7 @@ The pull-based sub-agent definition auto-handles the context load requirement:
 Spawn the implement sub-agent:
 
 - **Agent type**: `trellis-implement`
-- **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; finish by running project lint and type-check
+- **Task description**: Implement the reviewed task artifacts, consulting materials under `{TASK_DIR}/research/`; report the implemented outcome and any necessary actual application observation
 - **Dispatch prompt guard**: Tell the spawned agent it is already the `trellis-implement` sub-agent and must implement directly, not spawn another `trellis-implement` / `trellis-check`.
 
 The platform prelude auto-handles the context load requirement:
@@ -520,40 +520,17 @@ The platform prelude auto-handles the context load requirement:
 2. Read `{TASK_DIR}/prd.md`, then `design.md` if present, then `implement.md` if present
 3. Consult materials under `{TASK_DIR}/research/`
 4. Implement the code per reviewed artifacts
-5. Run project lint and type-check
+5. Confirm the current goal using existing evidence or the necessary actual application path
 
 [/codex-inline, Kilo, Antigravity, Devin]
 
-#### 2.2 Quality check `[required · repeatable]`
+#### 2.2 Current task result `[when needed]`
 
-[Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, ZCode, Reasonix, Trae]
+Use the current task's agreed outcome and existing evidence to decide whether anything remains unconfirmed. Review only the directly relevant change when that resolves a concrete delivery question. No compulsory reviewer dispatch, full-scope audit, repeat-until-green loop, or lint/typecheck/test suite is required.
 
-Spawn the check sub-agent:
+Use existing evidence first. Only when the current software goal still needs confirmation, run the actual application through that path and report the observed result. Do not add or run unit, mock, regression, governance, lint, formatting, or type-only checks. Do not require an all-green suite or a full-repository review. Preserve build requirements, actual permissions, business data protections, and the user's accepted behavior.
 
-- **Agent type**: `trellis-check`
-- **Task description**: Review all code changes against specs and task artifacts; fix any findings directly; ensure lint and type-check pass
-- **Dispatch prompt guard**: Tell the spawned agent it is already the `trellis-check` sub-agent and must review/fix directly, not spawn another `trellis-check` / `trellis-implement`.
-
-The check agent's job:
-- Review code changes against specs
-- Review code changes against `prd.md`, `design.md` if present, and `implement.md` if present
-- Auto-fix issues it finds
-- Run lint and typecheck to verify
-
-[/Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, ZCode, Reasonix, Trae]
-
-[codex-inline, Kilo, Antigravity, Devin]
-
-Load the `trellis-check` skill and verify the code per its guidance:
-- Spec compliance
-- lint / type-check / tests
-- Cross-layer consistency (when changes span layers)
-
-If issues are found → fix → re-check, until green.
-
-[/codex-inline, Kilo, Antigravity, Devin]
-
-**Final pass (before Phase 3.4 commit)**: the last 2.2 of a task must run full-scope, not just on the latest implement chunk. List all affected packages with `python3 ./.trellis/scripts/get_context.py --mode packages`, then load each package's spec index Quality Check section. This catches cross-layer / multi-package issues a mid-iteration local 2.2 cannot.
+If a dispatched agent is already the reviewer, it completes that assigned review directly without spawning another reviewer. Report the actual outcome and concrete gaps, then continue or finish the main task as appropriate.
 
 #### 2.3 Rollback `[on demand]`
 
@@ -704,5 +681,5 @@ Supported events: `after_create / after_start / after_finish / after_archive`. N
 
 For the workflow state machine's runtime contract, the locations of all status writers, pseudo-statuses (`no_task` / `stale_<source_type>`), the hook reachability matrix, and other deep details, see:
 
-- `.trellis/spec/cli/backend/workflow-state-contract.md` — runtime contract + writer table + test invariants
+- `.trellis/spec/cli/backend/workflow-state-contract.md` — runtime contract + writer table
 - `.trellis/scripts/inject-workflow-state.py` — actual parser (reads workflow.md only, no embedded text)

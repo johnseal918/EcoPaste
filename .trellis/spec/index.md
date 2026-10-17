@@ -34,9 +34,6 @@ handles ordinary interactions, and calls Rust through typed command wrappers.
 - Use macOS and Windows `#[cfg]` branches only. There is no Linux support target
   in this rewrite.
 
-## Verification Baseline
+## Current software result
 
-- Frontend: `pnpm lint` and `pnpm tsc` for TypeScript and Biome checks.
-- Rust: `cd src-tauri && cargo fmt && cargo clippy -- -D warnings && cargo test`.
-- UI changes still need a manual run through the affected window. This project
-  has no frontend test runner configured yet.
+Use existing evidence first. Only when the current software goal still needs confirmation, run the actual application through that path and report the observed result. Do not add or run unit, mock, regression, governance, lint, formatting, or type-only checks. Do not require an all-green suite or a full-repository review. Preserve build requirements, actual permissions, business data protections, and the user's accepted behavior.

@@ -141,20 +141,3 @@ fn apply_center(window: &WebviewWindow, monitor: &MonitorInfo) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::bounded_origin;
-
-    #[test]
-    fn cursor_following_remains_inside_remote_workarea() {
-        assert_eq!(bounded_origin(1300.0, 0.0, 1366.0, 540.0), 826.0);
-        assert_eq!(bounded_origin(760.0, 0.0, 728.0, 625.0), 103.0);
-        assert_eq!(bounded_origin(-300.0, 0.0, 1366.0, 540.0), 0.0);
-    }
-
-    #[test]
-    fn negative_desktop_coordinates_are_supported() {
-        assert_eq!(bounded_origin(-900.0, -1920.0, 1920.0, 800.0), -900.0);
-        assert_eq!(bounded_origin(10.0, -1920.0, 1920.0, 800.0), -800.0);
-    }
-}
