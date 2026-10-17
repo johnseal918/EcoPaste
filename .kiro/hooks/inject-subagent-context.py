@@ -374,7 +374,9 @@ All the information you need has been prepared for you:
 1. **Understand specs** - All dev specs are injected above, understand them
     2. **Understand task artifacts** - Read requirements, technical design if present, and execution plan if present
     3. **Implement feature** - Implement following specs and task artifacts
-4. **Self-check** - Ensure code quality against check specs
+4. **Deliver the current goal** - Use applicable evidence; do not start another check phase when delivery already supplies it.
+
+An additional run is necessary only when it directly confirms a user-agreed current business outcome, uses the real application's normal business flow with the relevant real input or deliverable, and resolves a specific gap in the existing applicable evidence. If existing evidence already answers that outcome, perform zero additional runs; an actual delivery operation that supplies the evidence already completes this work without a separate test phase. Running a script, changing code or SHA, or starting a new chat is not a reason to rerun. Unit, mock, synthetic-fixture, static/style, coverage, historical-suite, and governance checks are excluded. If a real business flow fails, fix only that blocked flow within the assigned scope; do not require all-green results, a fixed matrix, or unrelated repairs. Necessary build/packaging remains available without added tests. Preserve actual permissions, data protections, accepted behavior, and the user's delivery standard.
 
 ## Important Constraints
 
@@ -409,21 +411,20 @@ All check specs and dev specs you need:
 1. **Get changes** - Run `git diff --name-only` and `git diff` to get code changes
 2. **Check the current change** - Read relevant implementation and callers against the current task's explicit requirements
 3. **Resolve current blockers** - Fix only defects that prevent the current deliverable; report unrelated issues without extending the task
-4. **Confirm the current goal** - Use existing evidence or the necessary actual application path; do not run static or unit checks
+4. **Confirm the current goal** - An additional run is necessary only when it directly confirms a user-agreed current business outcome, uses the real application's normal business flow with the relevant real input or deliverable, and resolves a specific gap in the existing applicable evidence. If existing evidence already answers that outcome, perform zero additional runs; an actual delivery operation that supplies the evidence already completes this work without a separate test phase. Running a script, changing code or SHA, or starting a new chat is not a reason to rerun. Unit, mock, synthetic-fixture, static/style, coverage, historical-suite, and governance checks are excluded. If a real business flow fails, fix only that blocked flow within the assigned scope; do not require all-green results, a fixed matrix, or unrelated repairs. Necessary build/packaging remains available without added tests. Preserve actual permissions, data protections, accepted behavior, and the user's delivery standard.
 
 ## Important Constraints
 
-- Fix issues yourself, don't just report
-- Must execute complete checklist in check specs
-- Pay special attention to impact radius analysis (L1-L5)"""
+- Fix only the blocked current business flow within the assigned scope; report unrelated findings without extending the task.
+- Do not execute a complete checklist, fixed matrix, impact-radius audit, or all-green repair loop."""
 
 
 def build_finish_prompt(original_prompt: str, context: str) -> str:
-    """Build complete prompt for Finish (final check before PR)"""
+    """Build the finish prompt using the current task and available evidence."""
     return f"""<!-- trellis-hook-injected -->
 # Finish Agent Task
 
-You are performing the final check before creating a PR.
+Finish the assigned task using applicable delivery evidence; this prompt does not require a separate test phase.
 
 ## Your Context
 
@@ -447,7 +448,9 @@ Finish checklist and requirements:
    - If new pattern/convention found: read target spec file → update it → update index.md if needed
    - If this change alters a necessary existing contract, update that contract's relevant explanation; no fixed seven-section report is required
    - If pure code fix with no new patterns: skip this step
-4. **Report the actual result** - State the current software outcome and any concrete remaining gap
+4. **Report the actual result** - State the current software outcome and any concrete remaining gap.
+
+An additional run is necessary only when it directly confirms a user-agreed current business outcome, uses the real application's normal business flow with the relevant real input or deliverable, and resolves a specific gap in the existing applicable evidence. If existing evidence already answers that outcome, perform zero additional runs; an actual delivery operation that supplies the evidence already completes this work without a separate test phase. Running a script, changing code or SHA, or starting a new chat is not a reason to rerun. Unit, mock, synthetic-fixture, static/style, coverage, historical-suite, and governance checks are excluded. If a real business flow fails, fix only that blocked flow within the assigned scope; do not require all-green results, a fixed matrix, or unrelated repairs. Necessary build/packaging remains available without added tests. Preserve actual permissions, data protections, accepted behavior, and the user's delivery standard.
 5. **Confirm ready** - Ensure code is ready for PR
 
 ## Important Constraints
@@ -456,7 +459,7 @@ Finish checklist and requirements:
 - MUST read the target spec file BEFORE editing (avoid duplicating existing content)
 - Do NOT update specs for trivial changes (typos, formatting, obvious fixes)
 - If critical CODE issues found, report them clearly (fix specs, not code)
-- Verify all acceptance criteria in prd.md are met
+- Assess the user's current acceptance criteria from applicable evidence; do not rerun already demonstrated criteria.
 - Verify design.md and implement.md constraints when those files are present"""
 
 
@@ -732,7 +735,7 @@ def main():
             context = get_finish_context(repo_root, task_dir)
             new_prompt = build_finish_prompt(original_prompt, context)
         else:
-            # Regular check phase: use check context (full specs for self-fix loop)
+            # Requested check work: use the relevant task context
             context = get_check_context(repo_root, task_dir)
             new_prompt = build_check_prompt(original_prompt, context)
     elif subagent_type == AGENT_RESEARCH:

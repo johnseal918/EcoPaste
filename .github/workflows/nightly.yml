@@ -79,14 +79,20 @@ jobs:
 
             should_release=true
           else
+            build_inputs=(
+              src src-tauri public scripts/buildIcon.ts
+              index.html package.json pnpm-lock.yaml pnpm-workspace.yaml
+              rust-toolchain.toml tsconfig.json tsconfig.node.json
+              uno.config.ts vite.config.ts
+            )
             if [[ -n "${previous_tag}" ]]; then
-              changed_count="$(git rev-list --count "${previous_tag}..${target_sha}")"
+              changed_inputs="$(git diff --name-only "${previous_tag}" "${target_sha}" -- "${build_inputs[@]}")"
             else
-              changed_count="$(git rev-list --count "${target_sha}")"
+              changed_inputs="initial application build"
             fi
 
-            if [[ "${changed_count}" == "0" ]]; then
-              echo "No commits since ${previous_tag:-repository start}; skipping nightly release."
+            if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" && -z "${changed_inputs}" ]]; then
+              echo "No application or build-input changes since ${previous_tag:-repository start}; skipping nightly release."
               should_release=false
             else
               git config user.name "github-actions[bot]"

@@ -36,7 +36,7 @@ Confirm the main goal and why this review is needed from the dispatch and existi
 
 Fix a defect only when it directly prevents the current deliverable, breaks a necessary related behavior, or violates a real permission/data boundary. Report unrelated findings briefly and continue the authorized task.
 
-Use existing evidence first. Only when the current software goal still needs confirmation, run the actual application through that path and report the observed result. Do not add or run unit, mock, regression, governance, lint, formatting, or type-only checks. Do not require an all-green suite or a full-repository review. Preserve build requirements, actual permissions, business data protections, and the user's accepted behavior.
+An additional run is necessary only when it directly confirms a user-agreed current business outcome, uses the real application's normal business flow with the relevant real input or deliverable, and resolves a specific gap in the existing applicable evidence. If existing evidence already answers that outcome, perform zero additional runs; an actual delivery operation that supplies the evidence already completes this work without a separate test phase. Running a script, changing code or SHA, or starting a new chat is not a reason to rerun. Unit, mock, synthetic-fixture, static/style, coverage, historical-suite, and governance checks are excluded. If a real business flow fails, fix only that blocked flow within the assigned scope; do not require all-green results, a fixed matrix, or unrelated repairs. Necessary build/packaging remains available without added tests. Preserve actual permissions, data protections, accepted behavior, and the user's delivery standard.
 
 ## Git Ownership
 

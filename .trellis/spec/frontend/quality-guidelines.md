@@ -2,7 +2,7 @@
 
 ## Current software result
 
-Use existing evidence first. Only when the current software goal still needs confirmation, run the actual application through that path and report the observed result. Do not add or run unit, mock, regression, governance, lint, formatting, or type-only checks. Do not require an all-green suite or a full-repository review. Preserve build requirements, actual permissions, business data protections, and the user's accepted behavior.
+An additional run is necessary only when it directly confirms a user-agreed current business outcome, uses the real application's normal business flow with the relevant real input or deliverable, and resolves a specific gap in the existing applicable evidence. If existing evidence already answers that outcome, perform zero additional runs; an actual delivery operation that supplies the evidence already completes this work without a separate test phase. Running a script, changing code or SHA, or starting a new chat is not a reason to rerun. Unit, mock, synthetic-fixture, static/style, coverage, historical-suite, and governance checks are excluded. If a real business flow fails, fix only that blocked flow within the assigned scope; do not require all-green results, a fixed matrix, or unrelated repairs. Necessary build/packaging remains available without added tests. Preserve actual permissions, data protections, accepted behavior, and the user's delivery standard.
 
 ## Required Frontend Patterns
 
@@ -17,7 +17,7 @@ Use existing evidence first. Only when the current software goal still needs con
 
 ## Current preview behavior
 
-For the current preview recovery goal, use the existing Windows application to observe the affected main-list and side-panel preview path, including switching cards or reopening after idle when those are the unresolved behaviors. Reuse accepted evidence for unrelated features; do not require a fixed case count or a broad UI sweep.
+For the current preview recovery goal, select only the unresolved real application behavior after identifying the concrete evidence gap. Switching cards, reopening after idle, and side-panel preview are context for that choice, not a fixed checklist. Reuse applicable evidence, including the delivery operation itself.
 
 ## Scenario: Release Versioning
 
