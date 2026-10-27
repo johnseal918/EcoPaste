@@ -10,8 +10,12 @@ use clipboard_rs::common::RustImage;
 #[cfg(target_os = "windows")]
 use clipboard_rs::ClipboardContent;
 use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
+#[cfg(target_os = "windows")]
+use winapi::um::winuser::{IsClipboardFormatAvailable, RegisterClipboardFormatW};
 
 use super::payload::{ClipboardPayload, ImagePayload, TextPayload};
+#[cfg(target_os = "windows")]
+use super::source;
 use crate::core::{AppError, Result};
 use crate::settings::{Capture, CaptureKind};
 
@@ -31,6 +35,20 @@ impl ClipboardReader {
     ///
     /// 同一次复制可能同时存在文件、图片、HTML、RTF、纯文本表示；这里只返回第一个启用且可读取的类型。
     pub fn read_with_capture(&self, capture: &Capture) -> Result<Option<ClipboardPayload>> {
+        // Excel cells advertise BIFF and text alongside delayed picture formats.
+        // Avoid triggering large-sheet GDI rendering; Excel Copy as Picture
+        // and other image-only sources still follow the original image path.
+        #[cfg(target_os = "windows")]
+        if capture.text && self.ctx.has(ContentFormat::Text) && is_excel_cell_clipboard() {
+            let mut text_only = capture.clone();
+            text_only.html = false;
+            text_only.rtf = false;
+            log::debug!("clipboard source=excel format=biff+text requested=plain_text_only");
+            return self
+                .read_text_payload(&text_only)
+                .map(|text| text.map(ClipboardPayload::Text));
+        }
+
         let mut text_payload: Option<Option<TextPayload>> = None;
 
         for kind in capture.ordered_kinds() {
@@ -198,6 +216,22 @@ impl ClipboardReader {
             height,
         }))
     }
+}
+
+/// 仅检查已公布的 Excel 单元格格式，不发出数据读取请求。
+/// BIFF + 文本共同出现并且 owner 为 Excel 时才使用文本捷径。
+#[cfg(target_os = "windows")]
+fn is_excel_cell_clipboard() -> bool {
+    if !source::clipboard_owner_is_excel() {
+        return false;
+    }
+    ["Biff8", "Biff12", "Biff5", "XML Spreadsheet"]
+        .iter()
+        .any(|name| {
+            let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+            let format = unsafe { RegisterClipboardFormatW(wide.as_ptr()) };
+            format != 0 && unsafe { IsClipboardFormatAvailable(format) != 0 }
+        })
 }
 
 /// 平台剪贴板里 PNG 的原始格式标识符，用于 `get_buffer` 直取原始字节。
