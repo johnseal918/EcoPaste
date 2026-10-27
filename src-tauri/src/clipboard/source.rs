@@ -47,6 +47,33 @@ pub fn capture_frontmost_hint() -> Option<FrontmostHint> {
     }
 }
 
+/// 剪贴板来源优先采用 Win32 真正的 owner，而不是读取完成后的前台应用。
+/// 当 owner 不可用才回退到及时抓取的前台窗口，不读取用户数据。
+pub fn capture_clipboard_source_hint() -> Option<FrontmostHint> {
+    #[cfg(target_os = "windows")]
+    {
+        windows::capture_clipboard_owner_pid()
+            .map(FrontmostHint::WindowsPid)
+            .or_else(capture_frontmost_hint)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        capture_frontmost_hint()
+    }
+}
+
+/// 判断剪贴板所有者是否为 Excel，与当前前台窗口无关。
+#[cfg(target_os = "windows")]
+pub fn clipboard_owner_is_excel() -> bool {
+    windows::capture_clipboard_owner_pid().is_some_and(windows::is_excel_pid)
+}
+
+/// 获取仅用于诊断的剪贴板 owner PID，不读取或记录正文。
+#[cfg(target_os = "windows")]
+pub fn clipboard_owner_pid() -> Option<u32> {
+    windows::capture_clipboard_owner_pid()
+}
+
 /// 把轻量来源提示解析成稳定应用信息。这个函数允许放到后台线程执行。
 pub fn resolve_frontmost_hint(hint: FrontmostHint) -> Option<FrontmostApp> {
     match hint {
@@ -117,7 +144,28 @@ mod windows {
     use winapi::um::processthreadsapi::OpenProcess;
     use winapi::um::winbase::QueryFullProcessImageNameW;
     use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
-    use winapi::um::winuser::{GetForegroundWindow, GetWindowThreadProcessId};
+    use winapi::um::winuser::{GetClipboardOwner, GetForegroundWindow, GetWindowThreadProcessId};
+
+    /// 获取实际剪贴板所有者，而不是可能已被切换的前台窗口。
+    pub(super) fn capture_clipboard_owner_pid() -> Option<DWORD> {
+        let hwnd = unsafe { GetClipboardOwner() };
+        if hwnd.is_null() {
+            return None;
+        }
+        let mut pid: DWORD = 0;
+        unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+        (pid != 0).then_some(pid)
+    }
+
+    pub(super) fn is_excel_pid(pid: DWORD) -> bool {
+        let Some(path) = (unsafe { process_exe_path(pid) }) else {
+            return false;
+        };
+        Path::new(&path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("EXCEL.EXE"))
+    }
 
     pub(super) fn capture_pid() -> Option<DWORD> {
         let hwnd: HWND = unsafe { GetForegroundWindow() };
