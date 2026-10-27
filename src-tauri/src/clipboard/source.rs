@@ -68,6 +68,13 @@ pub fn clipboard_owner_is_excel() -> bool {
     windows::capture_clipboard_owner_pid().is_some_and(windows::is_excel_pid)
 }
 
+/// 只用来决定首次读取是否需要等待 Excel 完成格式发布。
+/// owner 与前台进程均只作为提示；不能把前台进程当作正式来源归属。
+#[cfg(target_os = "windows")]
+pub fn clipboard_may_be_excel() -> bool {
+    clipboard_owner_is_excel() || windows::capture_pid().is_some_and(windows::is_excel_pid)
+}
+
 /// 获取仅用于诊断的剪贴板 owner PID，不读取或记录正文。
 #[cfg(target_os = "windows")]
 pub fn clipboard_owner_pid() -> Option<u32> {
