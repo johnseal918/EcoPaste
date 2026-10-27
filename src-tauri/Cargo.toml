@@ -72,6 +72,7 @@ tauri-plugin-macos-permissions = "2"
 clipboard-win = "5.4.1"
 winapi = { version = "0.3", features = [
     "winuser",
+    "wingdi",
     "processthreadsapi",
     "handleapi",
     "winbase",

@@ -2,6 +2,8 @@ mod app_store;
 mod apps_registry;
 mod cleanup;
 mod detect;
+#[cfg(target_os = "windows")]
+mod emf;
 mod file_icon_store;
 mod guard;
 mod icon;

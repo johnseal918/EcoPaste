@@ -19,6 +19,8 @@ use std::time::Instant;
 
 use super::payload::{ClipboardPayload, ImagePayload, TextPayload};
 #[cfg(target_os = "windows")]
+use super::emf;
+#[cfg(target_os = "windows")]
 use super::source;
 use crate::core::{AppError, Result};
 use crate::settings::{Capture, CaptureKind};
@@ -46,7 +48,8 @@ impl ClipboardReader {
         #[cfg(target_os = "windows")]
         if source::clipboard_owner_is_excel() {
             let has_cells = is_excel_cell_clipboard();
-            if capture.text && self.ctx.has(ContentFormat::Text) {
+            let has_text = self.ctx.has(ContentFormat::Text);
+            if capture.text && has_text {
                 log::info!(
                     "clipboard excel selected=plain_text biff_available={has_cells} owner_pid={:?}",
                     source::clipboard_owner_pid()
@@ -58,6 +61,13 @@ impl ClipboardReader {
             if has_cells && capture.text {
                 // Cell text is not yet offered; do not request the large image.
                 return Ok(None);
+            }
+            // Explicit Excel Copy as Picture (Picture, not Bitmap) can provide
+            // only WMF/EMF. Never request it when cell or text formats exist:
+            // ordinary column/whole-sheet copies may advertise delayed EMF.
+            if capture.image && !has_text && !has_cells && emf::is_advertised() {
+                log::info!("clipboard excel image=vector_metafile selected=emf_fallback");
+                return emf::capture_png().map(|image| image.map(ClipboardPayload::Image));
             }
         }
 
