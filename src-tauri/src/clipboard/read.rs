@@ -12,6 +12,10 @@ use clipboard_rs::ClipboardContent;
 use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
 #[cfg(target_os = "windows")]
 use winapi::um::winuser::{IsClipboardFormatAvailable, RegisterClipboardFormatW};
+#[cfg(target_os = "windows")]
+use clipboard_win::{raw as clipboard_raw, Clipboard as WindowsClipboard};
+#[cfg(target_os = "windows")]
+use std::time::Instant;
 
 use super::payload::{ClipboardPayload, ImagePayload, TextPayload};
 #[cfg(target_os = "windows")]
@@ -35,18 +39,26 @@ impl ClipboardReader {
     ///
     /// 同一次复制可能同时存在文件、图片、HTML、RTF、纯文本表示；这里只返回第一个启用且可读取的类型。
     pub fn read_with_capture(&self, capture: &Capture) -> Result<Option<ClipboardPayload>> {
-        // Excel cells advertise BIFF and text alongside delayed picture formats.
-        // Avoid triggering large-sheet GDI rendering; Excel Copy as Picture
-        // and other image-only sources still follow the original image path.
+        // During Excel copy the delayed bitmap can precede BIFF publication.
+        // Prefer available Unicode text without triggering the delayed picture
+        // even when the BIFF metadata is temporarily absent. Picture-only copies
+        // without Unicode text continue through the normal image branch.
         #[cfg(target_os = "windows")]
-        if capture.text && self.ctx.has(ContentFormat::Text) && is_excel_cell_clipboard() {
-            let mut text_only = capture.clone();
-            text_only.html = false;
-            text_only.rtf = false;
-            log::debug!("clipboard source=excel format=biff+text requested=plain_text_only");
-            return self
-                .read_text_payload(&text_only)
-                .map(|text| text.map(ClipboardPayload::Text));
+        if source::clipboard_owner_is_excel() {
+            let has_cells = is_excel_cell_clipboard();
+            if capture.text && self.ctx.has(ContentFormat::Text) {
+                log::info!(
+                    "clipboard excel selected=plain_text biff_available={has_cells} owner_pid={:?}",
+                    source::clipboard_owner_pid()
+                );
+                return self
+                    .read_excel_plain_text()
+                    .map(|text| text.map(ClipboardPayload::Text));
+            }
+            if has_cells && capture.text {
+                // Cell text is not yet offered; do not request the large image.
+                return Ok(None);
+            }
         }
 
         let mut text_payload: Option<Option<TextPayload>> = None;
@@ -107,6 +119,67 @@ impl ClipboardReader {
         }
 
         Ok(Some(files))
+    }
+
+    /// Windows Excel 单元格仅读取原始 Unicode 字节，并在释放剪贴板后转码。
+    /// 这条路径不调用 clipboard-rs::get，避免持锁期间再次 OpenClipboard。
+    /// GetClipboardData 本身仍可能触发来源程序不可中断的延迟渲染。
+    #[cfg(target_os = "windows")]
+    fn read_excel_plain_text(&self) -> Result<Option<TextPayload>> {
+        let sequence_before = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
+        let started = Instant::now();
+        log::info!(
+            "clipboard excel unicode_read=start sequence={sequence_before} owner_pid={:?}",
+            source::clipboard_owner_pid()
+        );
+        let mut raw = Vec::new();
+        {
+            // A single open attempt. The watcher handles bounded retries
+            // instead of retrying while Excel is still publishing formats.
+            let _clip = WindowsClipboard::new().map_err(|err| {
+                AppError::Clipboard(format!("Windows clipboard text snapshot busy: {err}"))
+            })?;
+            log::info!(
+                "clipboard excel unicode_read=opened open_ms={}",
+                started.elapsed().as_millis()
+            );
+            clipboard_raw::get_vec(clipboard_win::formats::CF_UNICODETEXT, &mut raw)
+                .map_err(|err| {
+                    AppError::Clipboard(format!("Excel Unicode clipboard read failed: {err}"))
+                })?;
+        } // CloseClipboard before decoding, allocation and user-facing processing.
+        let sequence_after = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
+        log::info!(
+            "clipboard excel unicode_read=closed seq_before={sequence_before} seq_after={sequence_after} held_ms={} bytes={}",
+            started.elapsed().as_millis(),
+            raw.len()
+        );
+        if sequence_before != 0 && sequence_after != 0 && sequence_before != sequence_after {
+            return Err(AppError::Clipboard(
+                "Excel clipboard sequence changed during Unicode snapshot".to_owned(),
+            ));
+        }
+        if raw.len() % 2 != 0 {
+            return Err(AppError::Clipboard(
+                "Excel Unicode clipboard has an odd byte length".to_owned(),
+            ));
+        }
+        let mut utf16 = Vec::with_capacity(raw.len() / 2);
+        for chunk in raw.chunks_exact(2) {
+            let unit = u16::from_le_bytes([chunk[0], chunk[1]]);
+            if unit == 0 {
+                break;
+            }
+            utf16.push(unit);
+        }
+        if utf16.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(TextPayload {
+            text: String::from_utf16_lossy(&utf16),
+            html: None,
+            rtf: None,
+        }))
     }
 
     /// 读取剪贴板中的文本族表示，包含纯文本、HTML 和 RTF。
@@ -219,12 +292,9 @@ impl ClipboardReader {
 }
 
 /// 仅检查已公布的 Excel 单元格格式，不发出数据读取请求。
-/// BIFF + 文本共同出现并且 owner 为 Excel 时才使用文本捷径。
+/// BIFF 用于区分未就绪的单元格；实际 Excel owner 的 Unicode 优先路径不以其为门槛。
 #[cfg(target_os = "windows")]
 fn is_excel_cell_clipboard() -> bool {
-    if !source::clipboard_owner_is_excel() {
-        return false;
-    }
     ["Biff8", "Biff12", "Biff5", "XML Spreadsheet"]
         .iter()
         .any(|name| {
