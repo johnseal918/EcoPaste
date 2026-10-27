@@ -66,6 +66,14 @@ const WINDOWS_PENDING_RETRY_INTERVAL: Duration = Duration::from_millis(8);
 const WINDOWS_FAILED_SETTLE_WINDOW: Duration = Duration::from_secs(2);
 #[cfg(target_os = "windows")]
 const WINDOWS_FAILED_MAX_ATTEMPTS: u8 = 16;
+/// Do not seize Excel's clipboard while it is publishing a multi-format copy.
+/// Other applications retain the existing fast sequence watcher behavior.
+#[cfg(target_os = "windows")]
+const WINDOWS_EXCEL_FIRST_READ_SETTLE: Duration = Duration::from_millis(120);
+#[cfg(target_os = "windows")]
+const WINDOWS_EXCEL_FAILED_MAX_ATTEMPTS: u8 = 3;
+#[cfg(target_os = "windows")]
+const WINDOWS_EXCEL_PENDING_RETRY_INTERVAL: Duration = Duration::from_millis(120);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CaptureSnapshot {
@@ -349,12 +357,28 @@ fn spawn_watch_thread(
                             first_seen.elapsed().as_millis()
                         );
                     }
-                    pending = Some((sequence, now, now, 0));
+                    let excel_copy = source::clipboard_may_be_excel();
+                    let first_attempt = now
+                        + if excel_copy {
+                            WINDOWS_EXCEL_FIRST_READ_SETTLE
+                        } else {
+                            Duration::ZERO
+                        };
+                    pending = Some((sequence, now, first_attempt, 0));
+                    if excel_copy {
+                        log::info!("clipboard sequence={sequence} excel_initial_settle_ms=120");
+                    }
                     burst_until = Some(now + WINDOWS_BURST_WINDOW);
                 }
 
                 if let Some((target_sequence, first_seen, next_attempt, failed_attempts)) = pending {
                     if now >= next_attempt {
+                        // A newer clipboard publication invalidates the pending
+                        // request without ever opening the stale format.
+                        if unsafe { GetClipboardSequenceNumber() } != target_sequence {
+                            continue;
+                        }
+                        let excel_copy = source::clipboard_may_be_excel();
                         let attempt_started = std::time::Instant::now();
                         let outcome = capture_and_enqueue(
                             &reader,
@@ -377,8 +401,13 @@ fn spawn_watch_thread(
                             outcome,
                             CaptureSnapshot::ReadFailed
                         )));
+                        let max_attempts = if excel_copy {
+                            WINDOWS_EXCEL_FAILED_MAX_ATTEMPTS
+                        } else {
+                            WINDOWS_FAILED_MAX_ATTEMPTS
+                        };
                         let attempts_exhausted = matches!(outcome, CaptureSnapshot::ReadFailed)
-                            && failures >= WINDOWS_FAILED_MAX_ATTEMPTS;
+                            && failures >= max_attempts;
                         if should_ack_snapshot(outcome, elapsed) || attempts_exhausted {
                             if matches!(outcome, CaptureSnapshot::Empty) {
                                 log::debug!(
@@ -399,7 +428,12 @@ fn spawn_watch_thread(
                             pending = Some((
                                 target_sequence,
                                 first_seen,
-                                std::time::Instant::now() + WINDOWS_PENDING_RETRY_INTERVAL,
+                                std::time::Instant::now()
+                                    + if excel_copy {
+                                        WINDOWS_EXCEL_PENDING_RETRY_INTERVAL
+                                    } else {
+                                        WINDOWS_PENDING_RETRY_INTERVAL
+                                    },
                                 failures,
                             ));
                         }
