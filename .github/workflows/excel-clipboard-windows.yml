@@ -1,0 +1,57 @@
+name: EcoPaste Excel Clipboard Windows x64 Build
+
+"on":
+  push:
+    branches:
+      - validation/2026-10-27-excel-clipboard-windows
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    name: Build Excel clipboard fix on Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Generate Tauri icons
+        run: pnpm build:icon
+        env:
+          PLATFORM: windows-latest
+      - name: Build frontend
+        run: pnpm build
+      - name: Build Windows EXE
+        run: pnpm tauri build --no-bundle --target x86_64-pc-windows-msvc
+      - name: Upload exact source for provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: EcoPaste-ExcelClipboard-Source
+          path: |
+            src-tauri/src/clipboard/source.rs
+            src-tauri/src/clipboard/read.rs
+            src-tauri/src/clipboard/watcher.rs
+          if-no-files-found: error
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: EcoPaste-Windows-x64-ExcelClipboard-20261027
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/EcoPaste.exe
+          if-no-files-found: error
