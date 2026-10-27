@@ -4,6 +4,10 @@ name: EcoPaste Excel Clipboard Windows x64 Build
   push:
     branches:
       - validation/2026-10-27-excel-clipboard-windows
+  pull_request:
+    branches:
+      - feature/clipboard-priority-pin-panel
+  workflow_dispatch:
 
 permissions:
   contents: read
