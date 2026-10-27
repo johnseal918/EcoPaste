@@ -133,24 +133,23 @@ impl ClipboardReader {
             source::clipboard_owner_pid()
         );
         let mut raw = Vec::new();
-        {
+        let locked_for = {
             // A single open attempt. The watcher handles bounded retries
             // instead of retrying while Excel is still publishing formats.
             let _clip = WindowsClipboard::new().map_err(|err| {
                 AppError::Clipboard(format!("Windows clipboard text snapshot busy: {err}"))
             })?;
-            log::info!(
-                "clipboard excel unicode_read=opened open_ms={}",
-                started.elapsed().as_millis()
-            );
+            let opened = Instant::now();
             clipboard_raw::get_vec(clipboard_win::formats::CF_UNICODETEXT, &mut raw)
                 .map_err(|err| {
                     AppError::Clipboard(format!("Excel Unicode clipboard read failed: {err}"))
                 })?;
-        } // CloseClipboard before decoding, allocation and user-facing processing.
+            opened.elapsed()
+        }; // CloseClipboard before decoding or logging.
         let sequence_after = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
         log::info!(
-            "clipboard excel unicode_read=closed seq_before={sequence_before} seq_after={sequence_after} held_ms={} bytes={}",
+            "clipboard excel unicode_read=closed seq_before={sequence_before} seq_after={sequence_after} lock_ms={} total_ms={} bytes={}",
+            locked_for.as_millis(),
             started.elapsed().as_millis(),
             raw.len()
         );
