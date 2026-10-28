@@ -2,7 +2,8 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{atomic::{AtomicU64, Ordering}, Arc};
+use std::time::Instant;
 
 use chrono::{DateTime, Datelike, Local, Utc};
 use serde::{Deserialize, Serialize};
@@ -30,6 +31,9 @@ use crate::window::{self, CLIPBOARD_WINDOW_LABEL};
 
 /// 与前端 `src/constants/events.ts` 的 `TAURI_EVENT.CLIPBOARD_UPDATED` 一一对应。
 const CLIPBOARD_UPDATED_EVENT: &str = "clipboard://updated";
+
+// Metadata-only correlation; never log the record ID or clipboard content.
+static PASTE_OPERATION_SEQ: AtomicU64 = AtomicU64::new(1);
 
 /// 与前端 `src/constants/events.ts` 的 `TAURI_EVENT.CLIPBOARD_GROUPS_UPDATED` 一一对应。
 const CLIPBOARD_GROUPS_UPDATED_EVENT: &str = "clipboard-groups://updated";
@@ -494,12 +498,12 @@ pub async fn update_edited_clipboard_text(
         }
     }
     if paste_after_save {
-        if let Err(error) = write_edited_plain_text(guard.inner().as_ref(), &text) {
+        if let Err(error) = write_edited_plain_text(guard.inner().as_ref(), &text, &app) {
             return Err(AppError::Clipboard(format!(
                 "text was saved, but copying for paste failed: {error}"
             )));
         }
-        if let Err(error) = finish_paste(&app, true).await {
+        if let Err(error) = finish_paste(&app, true, None).await {
             return Err(AppError::Clipboard(format!(
                 "text was saved, but automatic paste failed: {error}"
             )));
@@ -520,7 +524,7 @@ pub async fn copy_edited_clipboard_text(
     validate_edited_text(&text)?;
     let pool = db.pool().await;
     check_edit_source(&app, &pool, &source_id).await?;
-    write_edited_plain_text(guard.inner().as_ref(), &text)
+    write_edited_plain_text(guard.inner().as_ref(), &text, &app)
 }
 
 /// 临时粘贴编辑结果，复用原有写回保护和系统粘贴，不新建历史记录。
@@ -535,8 +539,8 @@ pub async fn paste_edited_clipboard_text(
     validate_edited_text(&text)?;
     let pool = db.pool().await;
     check_edit_source(&app, &pool, &source_id).await?;
-    write_edited_plain_text(guard.inner().as_ref(), &text)?;
-    finish_paste(&app, true).await
+    write_edited_plain_text(guard.inner().as_ref(), &text, &app)?;
+    finish_paste(&app, true, None).await
 }
 
 #[derive(Debug, Serialize)]
@@ -690,20 +694,45 @@ pub async fn paste_clipboard_item(
         settings.clipboard.content.paste_files_as_path,
     );
 
-    crate::clipboard::write_to_clipboard(
+    let operation = PASTE_OPERATION_SEQ.fetch_add(1, Ordering::Relaxed);
+    let started = Instant::now();
+    log::info!(
+        "paste operation={operation} stage=write_begin kind={:?} plain={write_plain}",
+        item.kind
+    );
+    if let Err(err) = crate::clipboard::write_to_clipboard(
         &store,
         guard.inner().as_ref(),
         &item,
         write_plain,
         Some(&app),
-    )?;
+    ) {
+        log::warn!(
+            "paste operation={operation} stage=write_failed elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
+        return Err(err);
+    }
+    log::info!(
+        "paste operation={operation} stage=write_ok elapsed_ms={}",
+        started.elapsed().as_millis()
+    );
     mark_item_reused_if_enabled(&app, &pool, &id, item.kind).await?;
 
-    finish_paste(&app, false).await
+    let result = finish_paste(&app, false, Some(operation)).await;
+    match &result {
+        Ok(()) => log::info!("paste operation={operation} stage=inputs_submitted"),
+        Err(_) => log::warn!("paste operation={operation} stage=finish_failed"),
+    }
+    result
 }
 
 /// 将编辑态恢复前台目标后沿用原系统粘贴动作，普通历史粘贴逻辑不变。
-async fn finish_paste(app: &AppHandle, restore_editor_focus: bool) -> Result<()> {
+async fn finish_paste(app: &AppHandle, restore_editor_focus: bool, operation: Option<u64>) -> Result<()> {
+    let operation = operation.unwrap_or_else(|| PASTE_OPERATION_SEQ.fetch_add(1, Ordering::Relaxed));
+    #[cfg(target_os = "windows")]
+    let foreground_before = unsafe { winapi::um::winuser::GetForegroundWindow() };
+    log::info!("paste operation={operation} stage=finish_begin restore_editor_focus={restore_editor_focus}");
     if restore_editor_focus {
         window::set_clipboard_window_editing(app, CLIPBOARD_WINDOW_LABEL, false)?;
     }
@@ -722,7 +751,16 @@ async fn finish_paste(app: &AppHandle, restore_editor_focus: bool) -> Result<()>
     // 会赶在 panel 真正 order_out / 让出 key 前命中 panel 自己（webview 吞掉）。
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    crate::keystroke::simulate_paste()?;
+    #[cfg(target_os = "windows")]
+    log::info!(
+        "paste operation={operation} stage=pre_input foreground_unchanged={}",
+        unsafe { winapi::um::winuser::GetForegroundWindow() } == foreground_before
+    );
+    if let Err(err) = crate::keystroke::simulate_paste() {
+        log::warn!("paste operation={operation} stage=send_input_failed");
+        return Err(err);
+    }
+    log::info!("paste operation={operation} stage=send_input_submitted");
 
     // 固定窗口下粘贴完把 key 拿回来，让用户继续用键盘 / 列表操作；
     // 再等一拍让 ⌘V 事件被目标 App 消费完，避免 make_key 抢回焦点把按键吞回 panel。
