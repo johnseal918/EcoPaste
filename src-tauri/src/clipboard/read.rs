@@ -310,16 +310,30 @@ impl ClipboardReader {
     fn read_image(&self) -> Result<Option<ImagePayload>> {
         #[cfg(target_os = "windows")]
         {
-            if let Some(bytes) = self.read_windows_png()? {
-                if let Some((width, height)) = png_dimensions(&bytes) {
-                    return Ok(Some(ImagePayload { bytes, width, height }));
+            let png_snapshot = self.read_windows_png();
+            match &png_snapshot {
+                Ok(Some(bytes)) => {
+                    if let Some((width, height)) = png_dimensions(bytes) {
+                        return Ok(Some(ImagePayload {
+                            bytes: bytes.clone(),
+                            width,
+                            height,
+                        }));
+                    }
                 }
-                log::warn!("clipboard advertised PNG has invalid header; checking DIB");
+                Err(_) => {
+                    // DIB may already be readable when an advertised PNG format
+                    // is delayed or malformed. Do not retire this sequence yet.
+                    log::info!("clipboard PNG unreadable; checking DIB fallback");
+                }
+                Ok(None) => {}
             }
             // Only copy raw DIB bytes while the system clipboard is open.
             // Bitmap decoding and PNG encoding run after releasing both locks.
             let Some(bytes) = self.read_windows_dib()? else {
-                return Ok(None);
+                return png_snapshot
+                    .map(|_| None)
+                    .and_then(|_| Ok(None));
             };
             let decoder = image::codecs::bmp::BmpDecoder::new_without_file_header(
                 std::io::Cursor::new(bytes.as_slice()),
@@ -369,7 +383,14 @@ impl ClipboardReader {
         for format in formats {
             let mut data = Vec::new();
             match clipboard_raw::get_vec(format, &mut data) {
-                Ok(_) if !data.is_empty() => return Ok(Some(data)),
+                Ok(_) if !data.is_empty() && png_dimensions(&data).is_some() => {
+                    return Ok(Some(data));
+                }
+                Ok(_) if !data.is_empty() => {
+                    last_error = Some(AppError::Clipboard(
+                        "Windows PNG clipboard data has an invalid header".to_owned(),
+                    ));
+                }
                 Ok(_) => {}
                 Err(err) => {
                     last_error = Some(AppError::Clipboard(format!(
@@ -387,25 +408,34 @@ impl ClipboardReader {
     #[cfg(target_os = "windows")]
     fn read_windows_dib(&self) -> Result<Option<Vec<u8>>> {
         use clipboard_win::formats::{CF_DIB, CF_DIBV5};
-        let format = if clipboard_win::is_format_avail(CF_DIBV5) {
-            CF_DIBV5
-        } else if clipboard_win::is_format_avail(CF_DIB) {
-            CF_DIB
-        } else {
+        let formats: Vec<u32> = [CF_DIBV5, CF_DIB]
+            .into_iter()
+            .filter(|format| clipboard_win::is_format_avail(*format))
+            .collect();
+        if formats.is_empty() {
             return Ok(None);
-        };
+        }
         let _access = super::lock_windows_capture()?;
         let _clip = WindowsClipboard::new().map_err(|err| {
             AppError::Clipboard(format!("Windows clipboard busy reading DIB: {err}"))
         })?;
-        let mut data = Vec::new();
-        clipboard_raw::get_vec(format, &mut data).map_err(|err| {
-            AppError::Clipboard(format!("Windows DIB clipboard data temporarily unavailable: {err}"))
-        })?;
-        if data.is_empty() {
-            return Ok(None);
+        let mut last_error = None;
+        for format in formats {
+            let mut data = Vec::new();
+            match clipboard_raw::get_vec(format, &mut data) {
+                Ok(_) if !data.is_empty() => return Ok(Some(data)),
+                Ok(_) => {}
+                Err(err) => {
+                    last_error = Some(AppError::Clipboard(format!(
+                        "Windows DIB clipboard data temporarily unavailable: {err}"
+                    )));
+                }
+            }
         }
-        Ok(Some(data))
+        if let Some(error) = last_error {
+            return Err(error);
+        }
+        Ok(None)
     }
 }
 
