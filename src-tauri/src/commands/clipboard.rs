@@ -731,7 +731,7 @@ pub async fn paste_clipboard_item(
 async fn finish_paste(app: &AppHandle, restore_editor_focus: bool, operation: Option<u64>) -> Result<()> {
     let operation = operation.unwrap_or_else(|| PASTE_OPERATION_SEQ.fetch_add(1, Ordering::Relaxed));
     #[cfg(target_os = "windows")]
-    let foreground_before = unsafe { winapi::um::winuser::GetForegroundWindow() };
+    let foreground_before = unsafe { winapi::um::winuser::GetForegroundWindow() } as usize;
     log::info!("paste operation={operation} stage=finish_begin restore_editor_focus={restore_editor_focus}");
     if restore_editor_focus {
         window::set_clipboard_window_editing(app, CLIPBOARD_WINDOW_LABEL, false)?;
@@ -754,7 +754,7 @@ async fn finish_paste(app: &AppHandle, restore_editor_focus: bool, operation: Op
     #[cfg(target_os = "windows")]
     log::info!(
         "paste operation={operation} stage=pre_input foreground_unchanged={}",
-        unsafe { winapi::um::winuser::GetForegroundWindow() } == foreground_before
+        unsafe { winapi::um::winuser::GetForegroundWindow() } as usize == foreground_before
     );
     if let Err(err) = crate::keystroke::simulate_paste() {
         log::warn!("paste operation={operation} stage=send_input_failed");
