@@ -310,30 +310,27 @@ impl ClipboardReader {
     fn read_image(&self) -> Result<Option<ImagePayload>> {
         #[cfg(target_os = "windows")]
         {
-            let png_snapshot = self.read_windows_png();
-            match &png_snapshot {
+            let png_error = match self.read_windows_png() {
                 Ok(Some(bytes)) => {
-                    if let Some((width, height)) = png_dimensions(bytes) {
-                        return Ok(Some(ImagePayload {
-                            bytes: bytes.clone(),
-                            width,
-                            height,
-                        }));
+                    if let Some((width, height)) = png_dimensions(&bytes) {
+                        return Ok(Some(ImagePayload { bytes, width, height }));
                     }
+                    Some(AppError::Clipboard("Windows PNG header invalid".to_owned()))
                 }
-                Err(_) => {
-                    // DIB may already be readable when an advertised PNG format
-                    // is delayed or malformed. Do not retire this sequence yet.
+                Ok(None) => None,
+                Err(error) => {
+                    // A temporarily unreadable PNG must not hide a valid DIB.
                     log::info!("clipboard PNG unreadable; checking DIB fallback");
+                    Some(error)
                 }
-                Ok(None) => {}
-            }
+            };
             // Only copy raw DIB bytes while the system clipboard is open.
             // Bitmap decoding and PNG encoding run after releasing both locks.
             let Some(bytes) = self.read_windows_dib()? else {
-                return png_snapshot
-                    .map(|_| None)
-                    .and_then(|_| Ok(None));
+                return match png_error {
+                    Some(err) => Err(err),
+                    None => Ok(None),
+                };
             };
             let decoder = image::codecs::bmp::BmpDecoder::new_without_file_header(
                 std::io::Cursor::new(bytes.as_slice()),
