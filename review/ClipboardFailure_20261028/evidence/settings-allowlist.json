@@ -1,0 +1,38 @@
+{
+  "capture": {
+    "text": true,
+    "html": true,
+    "rtf": true,
+    "image": true,
+    "files": true,
+    "maxTextMb": 4,
+    "maxImageMb": 100,
+    "order": [
+      "files",
+      "image",
+      "html",
+      "rtf",
+      "text"
+    ]
+  },
+  "filters": {
+    "excluded_app_count": 0
+  },
+  "content": {
+    "autoPaste": "singleClickPaste",
+    "copyPlain": false,
+    "copyThenHideWindow": false,
+    "pastePlain": false,
+    "pasteFilesAsPath": false,
+    "updateOnReuse": false
+  },
+  "general": {
+    "autoStart": true,
+    "runAsAdmin": true
+  },
+  "shortcuts": {
+    "openClipboard": "Alt+C",
+    "openPreference": "Alt+X",
+    "winV": true
+  }
+}
