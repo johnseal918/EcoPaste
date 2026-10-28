@@ -61,25 +61,40 @@ const WINDOWS_BURST_WINDOW: Duration = Duration::from_secs(2);
 const WINDOWS_EMPTY_SETTLE_WINDOW: Duration = Duration::from_millis(500);
 #[cfg(target_os = "windows")]
 const WINDOWS_PENDING_RETRY_INTERVAL: Duration = Duration::from_millis(8);
-/// 对永久读取失败的格式建立时间和次数双重上限。
+/// Retry a potentially incomplete Windows clipboard for a bounded time.
+/// A rapid sequence of transient read errors must not exhaust a 16-attempt
+/// counter in 144ms. Backoff avoids hammering the source application.
 #[cfg(target_os = "windows")]
 const WINDOWS_FAILED_SETTLE_WINDOW: Duration = Duration::from_secs(2);
 #[cfg(target_os = "windows")]
-const WINDOWS_FAILED_MAX_ATTEMPTS: u8 = 16;
+const WINDOWS_FAILED_BACKOFF: [Duration; 6] = [
+    Duration::from_millis(20),
+    Duration::from_millis(40),
+    Duration::from_millis(80),
+    Duration::from_millis(140),
+    Duration::from_millis(200),
+    Duration::from_millis(250),
+];
 /// Do not seize Excel's clipboard while it is publishing a multi-format copy.
 /// Other applications retain the existing fast sequence watcher behavior.
 #[cfg(target_os = "windows")]
 const WINDOWS_EXCEL_FIRST_READ_SETTLE: Duration = Duration::from_millis(120);
 #[cfg(target_os = "windows")]
-const WINDOWS_EXCEL_FAILED_MAX_ATTEMPTS: u8 = 3;
-#[cfg(target_os = "windows")]
 const WINDOWS_EXCEL_PENDING_RETRY_INTERVAL: Duration = Duration::from_millis(120);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureFailure {
+    AccessBusy,
+    FormatNotReady,
+    Other,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CaptureSnapshot {
     Queued,
     Empty,
-    ReadFailed,
+    ReadFailed(CaptureFailure),
+    Stale,
 }
 
 /// Valid snapshots are acknowledged immediately. Stable empty formats and
@@ -88,7 +103,7 @@ enum CaptureSnapshot {
 fn should_ack_snapshot(outcome: CaptureSnapshot, pending_age: Duration) -> bool {
     matches!(outcome, CaptureSnapshot::Queued)
         || (matches!(outcome, CaptureSnapshot::Empty) && pending_age >= WINDOWS_EMPTY_SETTLE_WINDOW)
-        || (matches!(outcome, CaptureSnapshot::ReadFailed)
+        || (matches!(outcome, CaptureSnapshot::ReadFailed(_))
             && pending_age >= WINDOWS_FAILED_SETTLE_WINDOW)
 }
 
@@ -382,6 +397,8 @@ fn spawn_watch_thread(
                         let attempt_started = std::time::Instant::now();
                         let outcome = capture_and_enqueue(
                             &reader,
+                            Some(target_sequence),
+                            first_seen.elapsed(),
                             &app,
                             &guard,
                             &store,
@@ -399,41 +416,43 @@ fn spawn_watch_thread(
                         let elapsed = first_seen.elapsed();
                         let failures = failed_attempts.saturating_add(u8::from(matches!(
                             outcome,
-                            CaptureSnapshot::ReadFailed
+                            CaptureSnapshot::ReadFailed(_)
                         )));
-                        let max_attempts = if excel_copy {
-                            WINDOWS_EXCEL_FAILED_MAX_ATTEMPTS
-                        } else {
-                            WINDOWS_FAILED_MAX_ATTEMPTS
-                        };
-                        let attempts_exhausted = matches!(outcome, CaptureSnapshot::ReadFailed)
-                            && failures >= max_attempts;
-                        if should_ack_snapshot(outcome, elapsed) || attempts_exhausted {
+                        if matches!(outcome, CaptureSnapshot::Stale) {
+                            // The copied bytes no longer match the event that
+                            // started this attempt. Pick up the new sequence.
+                            log::info!("clipboard sequence={target_sequence} stale_after_read=true");
+                            pending = None;
+                        } else if should_ack_snapshot(outcome, elapsed) {
                             if matches!(outcome, CaptureSnapshot::Empty) {
-                                log::debug!(
-                                    "clipboard sequence {target_sequence}: no enabled/available payload after {}ms",
+                                log::info!(
+                                    "clipboard sequence={target_sequence} empty_after_ms={}",
                                     elapsed.as_millis()
                                 );
-                            } else if matches!(outcome, CaptureSnapshot::ReadFailed) {
+                            } else if let CaptureSnapshot::ReadFailed(reason) = outcome {
                                 log::warn!(
-                                    "clipboard sequence={target_sequence} read_failed: retiring after {}ms and {} failed attempts",
+                                    "clipboard sequence={target_sequence} read_failed: retiring_after_ms={} attempts={} reason={reason:?} owner_pid={:?}",
                                     elapsed.as_millis(),
-                                    failures
+                                    failures,
+                                    source::clipboard_owner_pid()
                                 );
                             }
                             last_sequence = target_sequence;
                             pending = None;
                         } else {
-                            // A newer sequence preempts this finite retry path.
+                            let delay = match outcome {
+                                CaptureSnapshot::ReadFailed(_) => WINDOWS_FAILED_BACKOFF
+                                    [(failures.saturating_sub(1) as usize).min(WINDOWS_FAILED_BACKOFF.len() - 1)],
+                                CaptureSnapshot::Empty if source::clipboard_owner_is_wechat() => {
+                                    Duration::from_millis(40)
+                                }
+                                _ if excel_copy => WINDOWS_EXCEL_PENDING_RETRY_INTERVAL,
+                                _ => WINDOWS_PENDING_RETRY_INTERVAL,
+                            };
                             pending = Some((
                                 target_sequence,
                                 first_seen,
-                                std::time::Instant::now()
-                                    + if excel_copy {
-                                        WINDOWS_EXCEL_PENDING_RETRY_INTERVAL
-                                    } else {
-                                        WINDOWS_PENDING_RETRY_INTERVAL
-                                    },
+                                std::time::Instant::now() + delay,
                                 failures,
                             ));
                         }
@@ -471,6 +490,8 @@ impl ClipboardHandler for ClipboardChangeHandler {
 
         capture_and_enqueue(
             &self.reader,
+            None,
+            Duration::MAX,
             &self.app,
             &self.guard,
             &self.store,
@@ -482,6 +503,8 @@ impl ClipboardHandler for ClipboardChangeHandler {
 
 fn capture_and_enqueue(
     reader: &ClipboardReader,
+    expected_sequence: Option<u32>,
+    clipboard_age: Duration,
     app: &AppHandle,
     guard: &Arc<WritebackGuard>,
     store: &ImageStore,
@@ -497,7 +520,7 @@ fn capture_and_enqueue(
     let source_hint = source::capture_clipboard_source_hint();
     // Windows 外层 pending 会处理短暂占用；不再对每次失败在内部重读六次昂贵格式。
     #[cfg(target_os = "windows")]
-    let read_result = reader.read_with_capture(&settings.clipboard.capture);
+    let read_result = reader.read_with_capture_age(&settings.clipboard.capture, clipboard_age);
     #[cfg(target_os = "macos")]
     let read_result = read_with_retry(&CLIPBOARD_READ_RETRY_DELAYS, || {
         reader.read_with_capture(&settings.clipboard.capture)
@@ -506,16 +529,41 @@ fn capture_and_enqueue(
         Ok(Some(payload)) => payload,
         Ok(None) => return CaptureSnapshot::Empty,
         Err(err) => {
-            let category = match err {
-                crate::core::AppError::Clipboard(ref message)
-                    if message.contains("text snapshot busy") => "clipboard_busy",
-                crate::core::AppError::Clipboard(_) => "format_read_failed",
-                crate::core::AppError::Other(_) => "other_reader_error",
+            // Release builds need to retain the error class and OS code to
+            // distinguish a busy owner from unavailable delayed data.
+            let description = err.to_string();
+            let reason = if description.contains("busy")
+                || description.contains("in progress")
+                || description.contains("write pending")
+            {
+                CaptureFailure::AccessBusy
+            } else if matches!(err, crate::core::AppError::Clipboard(_)) {
+                CaptureFailure::FormatNotReady
+            } else {
+                CaptureFailure::Other
             };
-            log::debug!("clipboard snapshot outcome=read_failed category={category}");
-            return CaptureSnapshot::ReadFailed;
+            let win32_code = description
+                .split("OSError(")
+                .nth(1)
+                .and_then(|tail| tail.split(')').next())
+                .and_then(|digits| digits.parse::<u32>().ok());
+            log::warn!(
+                "clipboard capture failed category={reason:?} win32_code={win32_code:?} owner_pid={:?}",
+                source::clipboard_owner_pid()
+            );
+            return CaptureSnapshot::ReadFailed(reason);
         }
     };
+    #[cfg(target_os = "windows")]
+    if let Some(expected) = expected_sequence {
+        let actual = unsafe { GetClipboardSequenceNumber() };
+        if actual != expected {
+            log::info!("clipboard capture stale expected_seq={expected} actual_seq={actual}");
+            return CaptureSnapshot::Stale;
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = expected_sequence;
     let captured_at = Utc::now();
 
     let app = app.clone();
