@@ -46,6 +46,7 @@ impl Drop for OwnedEmf {
 /// Acquire only an independently owned EMF handle while the clipboard is open.
 /// The returned object is valid after CloseClipboard; no GDI rendering occurs here.
 fn snapshot_emf() -> Result<OwnedEmf> {
+    let _access = super::lock_windows_capture()?;
     let _clipboard = WindowsClipboard::new().map_err(|err| {
         AppError::Clipboard(format!("Excel metafile clipboard busy: {err}"))
     })?;
