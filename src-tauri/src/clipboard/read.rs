@@ -7,15 +7,13 @@
 //! 仅当源是 TIFF/DIB 等非 PNG 时才回退到库的解码 + 重编码 PNG。
 
 use clipboard_rs::common::RustImage;
-#[cfg(target_os = "windows")]
-use clipboard_rs::ClipboardContent;
 use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
 #[cfg(target_os = "windows")]
 use winapi::um::winuser::{IsClipboardFormatAvailable, RegisterClipboardFormatW};
 #[cfg(target_os = "windows")]
 use clipboard_win::{raw as clipboard_raw, Clipboard as WindowsClipboard};
 #[cfg(target_os = "windows")]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::payload::{ClipboardPayload, ImagePayload, TextPayload};
 #[cfg(target_os = "windows")]
@@ -41,6 +39,18 @@ impl ClipboardReader {
     ///
     /// 同一次复制可能同时存在文件、图片、HTML、RTF、纯文本表示；这里只返回第一个启用且可读取的类型。
     pub fn read_with_capture(&self, capture: &Capture) -> Result<Option<ClipboardPayload>> {
+        self.read_with_capture_age(capture, std::time::Duration::MAX)
+    }
+
+    /// The watcher supplies the age of the still-current sequence. A manual
+    /// read needs no provisional file/image deferral and uses MAX.
+    pub fn read_with_capture_age(
+        &self,
+        capture: &Capture,
+        clipboard_age: std::time::Duration,
+    ) -> Result<Option<ClipboardPayload>> {
+        #[cfg(not(target_os = "windows"))]
+        let _ = clipboard_age;
         // During Excel copy the delayed bitmap can precede BIFF publication.
         // Prefer available Unicode text without triggering the delayed picture
         // even when the BIFF metadata is temporarily absent. Picture-only copies
@@ -68,6 +78,28 @@ impl ClipboardReader {
             if capture.image && !has_text && !has_cells && emf::is_advertised() {
                 log::info!("clipboard excel image=vector_metafile selected=emf_fallback");
                 return emf::capture_png().map(|image| image.map(ClipboardPayload::Image));
+            }
+        }
+
+        // WeChat may advertise a file drop before its picture becomes usable.
+        // Defer the provisional files record briefly, but keep real file copy
+        // support when no image formats arrive. Never treat CF_HDROP as proof
+        // of an image, and do not replace the user's global order.
+        #[cfg(target_os = "windows")]
+        if capture.image && source::clipboard_owner_is_wechat() {
+            let picture_advertised = self.ctx.has(ContentFormat::Image)
+                || self.windows_registered_png_available();
+            if picture_advertised {
+                log::debug!("clipboard wechat picture_advertised=true");
+                // A temporarily unreadable image is a retryable error, not a
+                // reason to commit an unrelated temporary file as the picture.
+                return self.read_image().map(|image| image.map(ClipboardPayload::Image));
+            }
+            if capture.files
+                && self.ctx.has(ContentFormat::Files)
+                && clipboard_age < std::time::Duration::from_millis(420)
+            {
+                return Ok(None);
             }
         }
 
@@ -117,13 +149,16 @@ impl ClipboardReader {
             return Ok(None);
         }
 
-        let files: Vec<String> = self
-            .ctx
-            .get_files()
-            .map_err(clip_err)?
-            .into_iter()
-            .filter(|path| !path.is_empty())
-            .collect();
+        let files: Vec<String> = {
+            #[cfg(target_os = "windows")]
+            let _access = super::lock_windows_capture()?;
+            self.ctx
+                .get_files()
+                .map_err(clip_err)?
+                .into_iter()
+                .filter(|path| !path.is_empty())
+                .collect()
+        };
         if files.is_empty() {
             return Ok(None);
         }
@@ -144,6 +179,7 @@ impl ClipboardReader {
         );
         let mut raw = Vec::new();
         let locked_for = {
+            let _access = super::lock_windows_capture()?;
             // A single open attempt. The watcher handles bounded retries
             // instead of retrying while Excel is still publishing formats.
             let _clip = WindowsClipboard::new().map_err(|err| {
@@ -193,41 +229,43 @@ impl ClipboardReader {
 
     /// 读取剪贴板中的文本族表示，包含纯文本、HTML 和 RTF。
     ///
-    /// Windows 读取时必须由我们先获得真正的剪贴板锁，再批量读出文本/HTML/RTF。
-    /// clipboard-rs 0.3.5 的 Windows get() 错误地忽略 OpenClipboard 失败，
-    /// 并把格式读取失败变为 Ok([])。由此造成的“空内容”会让 watcher 静默漏记。
-    /// 外层锁确保所有文本表示来自同一版本；若被其它程序占用则向上返回 Err，
-    /// 让 watcher 在尚未确认 sequence 前重试。
+    /// Open once and use raw getters; clipboard-rs::get nests OpenClipboard,
+    /// ignores acquisition/read errors and can turn a failed read into Ok([]).
     #[cfg(target_os = "windows")]
     fn read_text_payload(&self, capture: &Capture) -> Result<Option<TextPayload>> {
-        let mut formats = vec![ContentFormat::Text];
-        if capture.html {
-            formats.push(ContentFormat::Html);
-        }
-        if capture.rtf {
-            formats.push(ContentFormat::Rtf);
-        }
-
-        // clipboard-rs 0.3.5's get() internally ignores ClipboardWin::new_attempts
-        // failures and then converts each format read failure into an empty result.
-        // The external RAII lock is intentionally acquired first and kept alive
-        // across get(). Its nested open failure is ignored upstream, while the
-        // actual clipboard_win::get calls use our already open clipboard handle.
-        // If acquisition fails, propagate Err instead of a false Ok(None).
+        use clipboard_win::{formats, get};
+        let _access = super::lock_windows_capture()?;
         let _clipboard_lock = clipboard_win::Clipboard::new_attempts(10).map_err(|err| {
             AppError::Clipboard(format!("Windows clipboard text snapshot busy: {err}"))
         })?;
-        let contents = self.ctx.get(&formats).map_err(clip_err)?;
         let mut text = String::new();
         let mut html = None;
         let mut rtf = None;
-
-        for content in contents {
-            match content {
-                ClipboardContent::Text(value) => text = value,
-                ClipboardContent::Html(value) => html = non_empty_string(value),
-                ClipboardContent::Rtf(value) => rtf = non_empty_string(value),
-                _ => {}
+        if clipboard_win::is_format_avail(formats::CF_UNICODETEXT) {
+            text = get(formats::Unicode).map_err(clip_err)?;
+        }
+        if capture.html {
+            let format = formats::Html::new().ok_or_else(|| {
+                AppError::Clipboard("register Windows HTML format failed".to_owned())
+            })?;
+            if clipboard_win::is_format_avail(format.code()) {
+                match get::<String, _>(format) {
+                    Ok(value) => html = non_empty_string(value),
+                    Err(err) if !text.is_empty() => log::warn!("read optional clipboard HTML failed: {err}"),
+                    Err(err) => return Err(clip_err(err)),
+                }
+            }
+        }
+        if capture.rtf {
+            let format = clipboard_win::register_format("Rich Text Format").ok_or_else(|| {
+                AppError::Clipboard("register Windows RTF format failed".to_owned())
+            })?;
+            if clipboard_win::is_format_avail(format.get()) {
+                match get::<Vec<u8>, _>(formats::RawData(format.get())) {
+                    Ok(bytes) => rtf = non_empty_string(String::from_utf8_lossy(&bytes).trim_end_matches('\0').to_owned()),
+                    Err(err) if !text.is_empty() || html.is_some() => log::warn!("read optional clipboard RTF failed: {err}"),
+                    Err(err) => return Err(clip_err(err)),
+                }
             }
         }
 
@@ -270,34 +308,117 @@ impl ClipboardReader {
     /// 慢路径回退：源是 TIFF（macOS 截图/多数 App）/ DIB（Windows）等非 PNG 时，
     /// 交给 [`clipboard_rs`] 解码再编码为 PNG（存储格式恒为 PNG，这次转码无法避免）。
     fn read_image(&self) -> Result<Option<ImagePayload>> {
-        if let Ok(bytes) = self.ctx.get_buffer(PNG_FORMAT) {
-            if let Some((width, height)) = png_dimensions(&bytes) {
-                return Ok(Some(ImagePayload {
-                    bytes,
-                    width,
-                    height,
-                }));
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(bytes) = self.read_windows_png()? {
+                if let Some((width, height)) = png_dimensions(&bytes) {
+                    return Ok(Some(ImagePayload { bytes, width, height }));
+                }
+                log::warn!("clipboard advertised PNG has invalid header; checking DIB");
             }
-            // 拿到了 PNG 格式字节但解析不出尺寸（异常/截断）：落到下方回退，由库重新解码。
+            // Only copy raw DIB bytes while the system clipboard is open.
+            // Bitmap decoding and PNG encoding run after releasing both locks.
+            let Some(bytes) = self.read_windows_dib()? else {
+                return Ok(None);
+            };
+            let decoder = image::codecs::bmp::BmpDecoder::new_without_file_header(
+                std::io::Cursor::new(bytes.as_slice()),
+            ).map_err(clip_err)?;
+            let dynamic_image = image::DynamicImage::from_decoder(decoder).map_err(clip_err)?;
+            let image = clipboard_rs::RustImageData::from_dynamic_image(dynamic_image);
+            return image_payload_from_rust(image);
         }
-
-        let image = self.ctx.get_image().map_err(clip_err)?;
-        let (width, height) = image.get_size();
-        if width == 0 || height == 0 {
-            return Ok(None);
+        #[cfg(not(target_os = "windows"))]
+        {
+            if let Ok(bytes) = self.ctx.get_buffer(PNG_FORMAT) {
+                if let Some((width, height)) = png_dimensions(&bytes) {
+                    return Ok(Some(ImagePayload { bytes, width, height }));
+                }
+            }
+            let image = self.ctx.get_image().map_err(clip_err)?;
+            image_payload_from_rust(image)
         }
-
-        let bytes = image.to_png().map_err(clip_err)?.get_bytes().to_vec();
-        if bytes.is_empty() {
-            return Ok(None);
-        }
-
-        Ok(Some(ImagePayload {
-            bytes,
-            width,
-            height,
-        }))
     }
+
+    /// Registered PNG formats used by Windows and WeChat/Chromium.
+    #[cfg(target_os = "windows")]
+    fn windows_registered_png_available(&self) -> bool {
+        ["PNG", "image/png"].iter().any(|name| {
+            clipboard_win::register_format(name).is_some_and(|format| {
+                clipboard_win::is_format_avail(format.get())
+            })
+        })
+    }
+
+    #[cfg(target_os = "windows")]
+    fn read_windows_png(&self) -> Result<Option<Vec<u8>>> {
+        let formats: Vec<u32> = ["PNG", "image/png"]
+            .into_iter()
+            .filter_map(clipboard_win::register_format)
+            .map(|format| format.get())
+            .filter(|format| clipboard_win::is_format_avail(*format))
+            .collect();
+        if formats.is_empty() {
+            return Ok(None);
+        }
+        let _access = super::lock_windows_capture()?;
+        let _clip = WindowsClipboard::new().map_err(|err| {
+            AppError::Clipboard(format!("Windows clipboard busy reading PNG: {err}"))
+        })?;
+        let mut last_error = None;
+        for format in formats {
+            let mut data = Vec::new();
+            match clipboard_raw::get_vec(format, &mut data) {
+                Ok(_) if !data.is_empty() => return Ok(Some(data)),
+                Ok(_) => {}
+                Err(err) => {
+                    last_error = Some(AppError::Clipboard(format!(
+                        "Windows PNG clipboard data temporarily unavailable: {err}"
+                    )));
+                }
+            }
+        }
+        if let Some(error) = last_error {
+            return Err(error);
+        }
+        Ok(None)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn read_windows_dib(&self) -> Result<Option<Vec<u8>>> {
+        use clipboard_win::formats::{CF_DIB, CF_DIBV5};
+        let format = if clipboard_win::is_format_avail(CF_DIBV5) {
+            CF_DIBV5
+        } else if clipboard_win::is_format_avail(CF_DIB) {
+            CF_DIB
+        } else {
+            return Ok(None);
+        };
+        let _access = super::lock_windows_capture()?;
+        let _clip = WindowsClipboard::new().map_err(|err| {
+            AppError::Clipboard(format!("Windows clipboard busy reading DIB: {err}"))
+        })?;
+        let mut data = Vec::new();
+        clipboard_raw::get_vec(format, &mut data).map_err(|err| {
+            AppError::Clipboard(format!("Windows DIB clipboard data temporarily unavailable: {err}"))
+        })?;
+        if data.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(data))
+    }
+}
+
+fn image_payload_from_rust(image: clipboard_rs::RustImageData) -> Result<Option<ImagePayload>> {
+    let (width, height) = image.get_size();
+    if width == 0 || height == 0 {
+        return Ok(None);
+    }
+    let bytes = image.to_png().map_err(clip_err)?.get_bytes().to_vec();
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(ImagePayload { bytes, width, height }))
 }
 
 /// 仅检查已公布的 Excel 单元格格式，不发出数据读取请求。
