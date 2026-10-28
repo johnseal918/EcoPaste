@@ -16,7 +16,9 @@
 //! 缺失时退回 `content`。供「纯文本粘贴」快捷路径使用。
 
 use clipboard_rs::common::RustImage;
-use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext, RustImageData};
+#[cfg(not(target_os = "windows"))]
+use clipboard_rs::Clipboard;
+use clipboard_rs::{ClipboardContent, ClipboardContext, RustImageData};
 
 use super::guard::WritebackGuard;
 use super::storage::ImageStore;
@@ -32,24 +34,24 @@ pub fn write_to_clipboard(
     plain: bool,
     app: Option<&tauri::AppHandle>,
 ) -> Result<()> {
+    // Decode image files and prepare text outside the Win32 transaction gate.
     let ctx = ClipboardContext::new().map_err(clip_err)?;
 
     match item.kind {
-        ClipboardKind::Text => write_text(&ctx, guard, item, plain)?,
+        ClipboardKind::Text => write_text(&ctx, guard, item, plain, app)?,
         ClipboardKind::Image => write_image(&ctx, store, guard, item, app)?,
         // files + plain：把路径列表当文本写回，供「粘贴为路径」使用。
-        ClipboardKind::Files if plain => write_files_as_text(&ctx, guard, item)?,
-        ClipboardKind::Files => write_files(&ctx, guard, item)?,
+        ClipboardKind::Files if plain => write_files_as_text(&ctx, guard, item, app)?,
+        ClipboardKind::Files => write_files(&ctx, guard, item, app)?,
     }
     Ok(())
 }
 
 /// 编辑器临时纯文本写回：不创建历史记录，复用既有回环抑制。
-pub fn write_edited_plain_text(guard: &WritebackGuard, text: &str) -> Result<()> {
+pub fn write_edited_plain_text(guard: &WritebackGuard, text: &str, app: &tauri::AppHandle) -> Result<()> {
     let ctx = ClipboardContext::new().map_err(clip_err)?;
     guard.suppress(content_hash(ClipboardKind::Text, text));
-    ctx.set(vec![ClipboardContent::Text(text.to_owned())])
-        .map_err(clip_err)
+    set_contents(&ctx, vec![ClipboardContent::Text(text.to_owned())], Some(app))
 }
 
 fn write_text(
@@ -57,6 +59,7 @@ fn write_text(
     guard: &WritebackGuard,
     item: &ClipboardItem,
     plain: bool,
+    app: Option<&tauri::AppHandle>,
 ) -> Result<()> {
     // 纯文本模式下，OS 提供的 plain 表示优先；缺失时退回 content（plain 文本场景下 content 即纯文本）。
     let (content, sub_kind) = if plain {
@@ -73,32 +76,28 @@ fn write_text(
 
     match sub_kind {
         // 纯文本模式必须只写 Text flavor，确保清掉剪贴板中可能残留的 HTML/RTF。
-        None if plain => ctx
-            .set(vec![ClipboardContent::Text(content)])
-            .map_err(clip_err)?,
+        None if plain => set_contents(ctx, vec![ClipboardContent::Text(content)], app)?,
         // HTML / RTF 必须同时写入纯文本回退：clipboard-rs 的 set_html / set_rich_text
         // 会先 clearContents，单独写时只剩富格式，多数应用读 plain/text 拿不到就拒绝粘贴。
         // 走 set(Vec<ClipboardContent>) 一次写多格式（内部不再相互清空）。
         Some(ClipboardSubKind::Html) => {
             let plain = item.search_text.clone().unwrap_or_else(|| content.clone());
             guard.suppress(content_hash(ClipboardKind::Text, &plain));
-            ctx.set(vec![
+            set_contents(ctx, vec![
                 ClipboardContent::Text(plain),
                 ClipboardContent::Html(content),
-            ])
-            .map_err(clip_err)?;
+            ], app)?;
         }
         Some(ClipboardSubKind::Rtf) => {
             let plain = item.search_text.clone().unwrap_or_else(|| content.clone());
             guard.suppress(content_hash(ClipboardKind::Text, &plain));
-            ctx.set(vec![
+            set_contents(ctx, vec![
                 ClipboardContent::Text(plain),
                 ClipboardContent::Rtf(content),
-            ])
-            .map_err(clip_err)?;
+            ], app)?;
         }
         // url / email / color / path 及无 sub_kind 都走纯文本通道。
-        _ => ctx.set_text(content).map_err(clip_err)?,
+        _ => set_contents(ctx, vec![ClipboardContent::Text(content)], app)?,
     }
     Ok(())
 }
@@ -215,7 +214,8 @@ fn write_image_windows(image: &RustImageData, app: Option<&tauri::AppHandle>) ->
     let png_format = clipboard_win::register_format("PNG").ok_or_else(|| {
         AppError::Clipboard("register Windows PNG clipboard format failed".to_owned())
     })?;
-    let _clipboard = open_windows_image_clipboard(app)?;
+    let _access = super::lock_windows_write()?;
+    let _clipboard = open_windows_clipboard(app)?;
     raw::empty().map_err(|err| {
         AppError::Clipboard(format!("clear Windows clipboard for image failed: {err}"))
     })?;
@@ -242,7 +242,7 @@ fn write_image_windows(image: &RustImageData, app: Option<&tauri::AppHandle>) ->
 }
 
 #[cfg(target_os = "windows")]
-fn open_windows_image_clipboard(
+fn open_windows_clipboard(
     app: Option<&tauri::AppHandle>,
 ) -> Result<clipboard_win::Clipboard> {
     use tauri::Manager;
@@ -258,8 +258,7 @@ fn open_windows_image_clipboard(
         }
         hwnd.0 as clipboard_win::types::HWND
     } else {
-        // Only legacy desktop-only tests call this path without an AppHandle.
-        std::ptr::null_mut()
+        return Err(AppError::Clipboard("Windows clipboard write requires an application window".to_owned()));
     };
     let mut last_error = String::new();
     for delay_ms in [0, 10, 30, 70, 140] {
@@ -272,11 +271,11 @@ fn open_windows_image_clipboard(
         }
     }
     Err(AppError::Clipboard(format!(
-        "open Windows clipboard for image failed: {last_error}"
+        "open Windows clipboard for write failed: {last_error}"
     )))
 }
 
-fn write_files(ctx: &ClipboardContext, guard: &WritebackGuard, item: &ClipboardItem) -> Result<()> {
+fn write_files(ctx: &ClipboardContext, guard: &WritebackGuard, item: &ClipboardItem, app: Option<&tauri::AppHandle>) -> Result<()> {
     let paths: Vec<String> = item
         .content
         .split('\n')
@@ -288,7 +287,7 @@ fn write_files(ctx: &ClipboardContext, guard: &WritebackGuard, item: &ClipboardI
     }
 
     guard.suppress(item.content_hash.clone());
-    ctx.set_files(paths).map_err(clip_err)?;
+    set_contents(ctx, vec![ClipboardContent::Files(paths)], app)?;
     Ok(())
 }
 
@@ -298,12 +297,86 @@ fn write_files_as_text(
     ctx: &ClipboardContext,
     guard: &WritebackGuard,
     item: &ClipboardItem,
+    app: Option<&tauri::AppHandle>,
 ) -> Result<()> {
     let text = item.content.clone();
 
     guard.suppress(content_hash(ClipboardKind::Text, &text));
-    ctx.set_text(text).map_err(clip_err)?;
+    set_contents(ctx, vec![ClipboardContent::Text(text)], app)?;
     Ok(())
+}
+
+/// Publish every requested format in one checked transaction. Do not call
+/// clipboard-rs::set here: it ignores both open and per-format write failures.
+fn set_contents(ctx: &ClipboardContext, contents: Vec<ClipboardContent>, app: Option<&tauri::AppHandle>) -> Result<()> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        ctx.set(contents).map_err(clip_err)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use clipboard_win::{options, raw};
+        let _ = ctx;
+        if contents.iter().any(|value| !matches!(value, ClipboardContent::Text(_) | ClipboardContent::Html(_) | ClipboardContent::Rtf(_) | ClipboardContent::Files(_))) {
+            return Err(AppError::Clipboard("unsupported Windows clipboard write format".to_owned()));
+        }
+        // Do not require registration of HTML/RTF when writing ordinary text.
+        let html = if contents.iter().any(|v| matches!(v, ClipboardContent::Html(_))) {
+            Some(clipboard_win::formats::Html::new().ok_or_else(|| {
+                AppError::Clipboard("register Windows HTML format failed".to_owned())
+            })?)
+        } else {
+            None
+        };
+        let rtf = if contents.iter().any(|v| matches!(v, ClipboardContent::Rtf(_))) {
+            Some(clipboard_win::register_format("Rich Text Format").ok_or_else(|| {
+                AppError::Clipboard("register Windows RTF format failed".to_owned())
+            })?)
+        } else {
+            None
+        };
+        let _access = super::lock_windows_write()?;
+        let _clipboard = open_windows_clipboard(app)?;
+        raw::empty().map_err(clip_err)?;
+        let mut plain_written = false;
+        for content in contents {
+            let (result, optional_rich): (clipboard_win::SysResult<()>, bool) = match content {
+                ClipboardContent::Text(text) => {
+                    (raw::set_string_with(&text, options::NoClear), false)
+                }
+                ClipboardContent::Html(text) => (
+                    raw::set_html_with(html.as_ref().expect("HTML format pre-registered").code(), &text, options::NoClear),
+                    true,
+                ),
+                ClipboardContent::Rtf(text) => (
+                    raw::set_without_clear(rtf.as_ref().expect("RTF format pre-registered").get(), text.as_bytes()),
+                    true,
+                ),
+                ClipboardContent::Files(paths) => {
+                    (raw::set_file_list_with(&paths, options::NoClear), false)
+                }
+                _ => unreachable!("formats validated before opening clipboard"),
+            };
+            match result {
+                Ok(()) => {
+                    if !optional_rich {
+                        plain_written = true;
+                    }
+                }
+                Err(err) if optional_rich && plain_written => {
+                    // A rich format is optional only when the plain-text fallback
+                    // was already successfully published. Never hide text errors.
+                    log::warn!("clipboard optional rich format publication failed: {err}");
+                }
+                Err(err) => {
+                    log::warn!("clipboard required format publication failed: {err}");
+                    return Err(clip_err(err));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 fn clip_err<E: std::fmt::Display>(err: E) -> AppError {
