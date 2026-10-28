@@ -547,9 +547,12 @@ fn capture_and_enqueue(
                 .nth(1)
                 .and_then(|tail| tail.split(')').next())
                 .and_then(|digits| digits.parse::<u32>().ok());
+            #[cfg(target_os = "windows")]
+            let owner_pid = source::clipboard_owner_pid();
+            #[cfg(not(target_os = "windows"))]
+            let owner_pid: Option<u32> = None;
             log::warn!(
-                "clipboard capture failed category={reason:?} win32_code={win32_code:?} owner_pid={:?}",
-                source::clipboard_owner_pid()
+                "clipboard capture failed category={reason:?} win32_code={win32_code:?} owner_pid={owner_pid:?}"
             );
             return CaptureSnapshot::ReadFailed(reason);
         }
