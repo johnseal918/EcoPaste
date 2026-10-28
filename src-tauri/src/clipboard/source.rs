@@ -81,6 +81,13 @@ pub fn clipboard_owner_pid() -> Option<u32> {
     windows::capture_clipboard_owner_pid()
 }
 
+#[cfg(target_os = "windows")]
+pub fn clipboard_owner_is_wechat() -> bool {
+    windows::capture_clipboard_owner_pid()
+        .and_then(windows::from_pid)
+        .is_some_and(|app| app.name.eq_ignore_ascii_case("Weixin") || app.name.eq_ignore_ascii_case("WeChat"))
+}
+
 /// 把轻量来源提示解析成稳定应用信息。这个函数允许放到后台线程执行。
 pub fn resolve_frontmost_hint(hint: FrontmostHint) -> Option<FrontmostApp> {
     match hint {
