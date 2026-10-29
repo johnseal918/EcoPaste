@@ -51,6 +51,14 @@ fn lock_windows_capture() -> crate::core::Result<std::sync::MutexGuard<'static, 
     }
 }
 
+// A capture that already owns the gate can check again between optional
+// clipboard formats and yield promptly to the next explicit user write.
+#[cfg(target_os = "windows")]
+fn windows_write_pending() -> bool {
+    use std::sync::atomic::Ordering;
+    WINDOWS_WRITE_WAITING.load(Ordering::Acquire) > 0
+}
+
 // Writers stop new captures while waiting, so a stream of clipboard events
 // cannot indefinitely starve a user's explicit paste request.
 #[cfg(target_os = "windows")]
