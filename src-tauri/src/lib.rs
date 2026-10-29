@@ -2,6 +2,13 @@ mod admin;
 mod autostart;
 mod backup;
 mod clipboard;
+
+/// Run the internal clipboard capture worker without starting Tauri, the
+/// updater, tray, database or the single-instance plugin.
+#[cfg(target_os = "windows")]
+pub fn run_clipboard_capture_worker_if_requested() -> bool {
+    clipboard::worker::run_if_requested()
+}
 mod commands;
 mod core;
 mod db;

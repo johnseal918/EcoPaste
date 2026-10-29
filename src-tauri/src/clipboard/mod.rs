@@ -4,6 +4,8 @@ mod cleanup;
 mod detect;
 #[cfg(target_os = "windows")]
 mod emf;
+#[cfg(target_os = "windows")]
+pub(crate) mod worker;
 mod file_icon_store;
 mod guard;
 mod icon;
@@ -59,19 +61,26 @@ fn windows_write_pending() -> bool {
     WINDOWS_WRITE_WAITING.load(Ordering::Acquire) > 0
 }
 
-// Writers stop new captures while waiting, so a stream of clipboard events
-// cannot indefinitely starve a user's explicit paste request.
+// Keep the foreground intent visible for the full native write transaction,
+// not only while the process mutex is being acquired. The separate clipboard
+// worker polls this flag and can be retired if it is stuck in WM_RENDERFORMAT.
 #[cfg(target_os = "windows")]
-fn lock_windows_write() -> crate::core::Result<std::sync::MutexGuard<'static, ()>> {
-    use std::sync::atomic::Ordering;
-    struct PendingWrite;
-    impl Drop for PendingWrite {
-        fn drop(&mut self) {
-            WINDOWS_WRITE_WAITING.fetch_sub(1, Ordering::Release);
-        }
+struct WindowsWriteGate {
+    _access: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsWriteGate {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering;
+        WINDOWS_WRITE_WAITING.fetch_sub(1, Ordering::Release);
     }
+}
+
+#[cfg(target_os = "windows")]
+fn lock_windows_write() -> crate::core::Result<WindowsWriteGate> {
+    use std::sync::atomic::Ordering;
     WINDOWS_WRITE_WAITING.fetch_add(1, Ordering::AcqRel);
-    let _pending = PendingWrite;
     let started = std::time::Instant::now();
     loop {
         let guard = match WINDOWS_ACCESS.try_lock() {
@@ -81,9 +90,10 @@ fn lock_windows_write() -> crate::core::Result<std::sync::MutexGuard<'static, ()
         };
         if let Some(guard) = guard {
             log::info!("clipboard write gate acquired wait_ms={}", started.elapsed().as_millis());
-            return Ok(guard);
+            return Ok(WindowsWriteGate { _access: guard });
         }
         if started.elapsed() >= std::time::Duration::from_secs(2) {
+            WINDOWS_WRITE_WAITING.fetch_sub(1, Ordering::Release);
             log::warn!("clipboard write gate busy wait_ms={}", started.elapsed().as_millis());
             return Err(crate::core::AppError::Clipboard(
                 "Windows clipboard busy: in-flight EcoPaste capture did not finish".to_owned(),

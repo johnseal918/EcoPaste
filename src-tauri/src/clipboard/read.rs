@@ -14,6 +14,10 @@ use winapi::um::winuser::{IsClipboardFormatAvailable, RegisterClipboardFormatW};
 use clipboard_win::{raw as clipboard_raw, Clipboard as WindowsClipboard};
 #[cfg(target_os = "windows")]
 use std::time::{Duration, Instant};
+#[cfg(target_os = "windows")]
+use std::sync::Mutex;
+#[cfg(target_os = "windows")]
+use super::worker::WorkerSession;
 
 use super::payload::{ClipboardPayload, ImagePayload, TextPayload};
 #[cfg(target_os = "windows")]
@@ -61,12 +65,18 @@ impl Drop for NativeClipboardStage {
 /// 监听线程（2.2）会持有一个长生命周期实例复用。
 pub struct ClipboardReader {
     ctx: ClipboardContext,
+    #[cfg(target_os = "windows")]
+    worker: Mutex<WorkerSession>,
 }
 
 impl ClipboardReader {
     pub fn new() -> Result<Self> {
         let ctx = ClipboardContext::new().map_err(clip_err)?;
-        Ok(Self { ctx })
+        Ok(Self {
+            ctx,
+            #[cfg(target_os = "windows")]
+            worker: Mutex::new(WorkerSession::default()),
+        })
     }
 
     /// 读取当前剪贴板，按用户配置的内容类型顺序归类为单一载荷。
@@ -82,6 +92,28 @@ impl ClipboardReader {
         &self,
         capture: &Capture,
         clipboard_age: std::time::Duration,
+    ) -> Result<Option<ClipboardPayload>> {
+        // A Win32 delayed-render call cannot be preempted in a Rust thread.
+        // The persistent helper can be retired without blocking a user paste.
+        #[cfg(target_os = "windows")]
+        {
+            return self.worker
+                .lock()
+                .map_err(|_| AppError::Clipboard("clipboard worker mutex poisoned".to_owned()))?
+                .capture(capture, clipboard_age);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.read_native_with_capture_age(capture, clipboard_age)
+        }
+    }
+
+    /// Native path executed by the separate Windows helper process. macOS
+    /// uses it directly; no second watcher or alternative database flow.
+    pub(super) fn read_native_with_capture_age(
+        &self,
+        capture: &Capture,
+        clipboard_age: Duration,
     ) -> Result<Option<ClipboardPayload>> {
         #[cfg(not(target_os = "windows"))]
         let _ = clipboard_age;
@@ -275,60 +307,77 @@ impl ClipboardReader {
         let _clipboard_lock = clipboard_win::Clipboard::new_attempts(10).map_err(|err| {
             AppError::Clipboard(format!("Windows clipboard text snapshot busy: {err}"))
         })?;
+
         let mut text = String::new();
-        let mut html = None;
-        let mut rtf = None;
         if clipboard_win::is_format_avail(formats::CF_UNICODETEXT) {
             log::info!("clipboard native_read request=CF_UNICODETEXT");
             text = get(formats::Unicode).map_err(clip_err)?;
         }
-        // A user paste must not wait for a second optional delayed-rendered
-        // format after a usable plain-text snapshot has already been obtained.
-        if super::windows_write_pending() {
-            return if text.is_empty() {
-                Err(AppError::Clipboard("Windows clipboard busy: EcoPaste write pending".to_owned()))
-            } else {
-                Ok(Some(TextPayload { text, html, rtf }))
-            };
-        }
-        if capture.html {
-            let format = formats::Html::new().ok_or_else(|| {
-                AppError::Clipboard("register Windows HTML format failed".to_owned())
-            })?;
-            if clipboard_win::is_format_avail(format.code()) {
-                log::info!("clipboard native_read request=HTML");
-                match get::<String, _>(format) {
-                    Ok(value) => html = non_empty_string(value),
-                    Err(err) if !text.is_empty() => log::warn!("read optional clipboard HTML failed: {err}"),
-                    Err(err) => return Err(clip_err(err)),
-                }
-            }
-        }
-        if super::windows_write_pending() {
-            return if text.is_empty() && html.is_none() {
-                Err(AppError::Clipboard("Windows clipboard busy: EcoPaste write pending".to_owned()))
-            } else {
-                Ok(Some(TextPayload { text, html, rtf }))
-            };
-        }
-        if capture.rtf {
-            let format = clipboard_win::register_format("Rich Text Format").ok_or_else(|| {
-                AppError::Clipboard("register Windows RTF format failed".to_owned())
-            })?;
-            if clipboard_win::is_format_avail(format.get()) {
-                log::info!("clipboard native_read request=RTF");
-                match get::<Vec<u8>, _>(formats::RawData(format.get())) {
-                    Ok(bytes) => rtf = non_empty_string(String::from_utf8_lossy(&bytes).trim_end_matches('\0').to_owned()),
-                    Err(err) if !text.is_empty() || html.is_some() => log::warn!("read optional clipboard RTF failed: {err}"),
-                    Err(err) => return Err(clip_err(err)),
-                }
-            }
-        }
-
-        if text.is_empty() && html.is_none() && rtf.is_none() {
+        // The current ingest/selection semantics require a non-empty plain
+        // fallback even for HTML and RTF. Do not request delayed rich formats
+        // when they cannot produce any selectable history item.
+        if text.trim().is_empty() {
             return Ok(None);
         }
 
+        let mut html = None;
+        let mut rtf = None;
+        for kind in capture.ordered_kinds() {
+            if !capture.is_enabled(kind) {
+                continue;
+            }
+            if super::windows_write_pending() {
+                return if capture.text {
+                    Ok(Some(TextPayload { text, html: None, rtf: None }))
+                } else {
+                    Err(AppError::Clipboard(
+                        "Windows clipboard busy: EcoPaste write pending".to_owned(),
+                    ))
+                };
+            }
+            match kind {
+                CaptureKind::Text => break,
+                CaptureKind::Html => {
+                    let format = formats::Html::new().ok_or_else(|| {
+                        AppError::Clipboard("register Windows HTML format failed".to_owned())
+                    })?;
+                    if clipboard_win::is_format_avail(format.code()) {
+                        log::info!("clipboard native_read request=HTML");
+                        match get::<String, _>(format) {
+                            Ok(value) => html = non_empty_string(value),
+                            Err(err) => log::warn!("read optional clipboard HTML failed: {err}"),
+                        }
+                    }
+                    // HTML is the highest usable format; RTF would add no
+                    // value to the selected payload and could delay-render.
+                    if html.as_ref().is_some_and(|value| !value.trim().is_empty()) {
+                        break;
+                    }
+                }
+                CaptureKind::Rtf => {
+                    let format = clipboard_win::register_format("Rich Text Format").ok_or_else(|| {
+                        AppError::Clipboard("register Windows RTF format failed".to_owned())
+                    })?;
+                    if clipboard_win::is_format_avail(format.get()) {
+                        log::info!("clipboard native_read request=RTF");
+                        match get::<Vec<u8>, _>(formats::RawData(format.get())) {
+                            Ok(bytes) => {
+                                rtf = non_empty_string(
+                                    String::from_utf8_lossy(&bytes)
+                                        .trim_end_matches('\0')
+                                        .to_owned(),
+                                );
+                            }
+                            Err(err) => log::warn!("read optional clipboard RTF failed: {err}"),
+                        }
+                    }
+                    if rtf.as_ref().is_some_and(|value| !value.trim().is_empty()) {
+                        break;
+                    }
+                }
+                CaptureKind::Files | CaptureKind::Image => {}
+            }
+        }
         Ok(Some(TextPayload { text, html, rtf }))
     }
 
