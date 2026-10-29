@@ -23,6 +23,40 @@ use super::source;
 use crate::core::{AppError, Result};
 use crate::settings::{Capture, CaptureKind};
 
+/// Metadata-only request stage. Start is logged BEFORE Win32 clipboard calls;
+/// the corresponding end is logged after all following RAII clipboard locks
+/// have been released. A blocked delayed render still leaves the begin record.
+#[cfg(target_os = "windows")]
+struct NativeClipboardStage {
+    format_group: &'static str,
+    started: Instant,
+    sequence: u32,
+}
+
+#[cfg(target_os = "windows")]
+impl NativeClipboardStage {
+    fn begin(format_group: &'static str) -> Self {
+        let sequence = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
+        log::info!(
+            "clipboard native_read begin group={format_group} sequence={sequence} owner_pid={:?}",
+            source::clipboard_owner_pid()
+        );
+        Self { format_group, started: Instant::now(), sequence }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for NativeClipboardStage {
+    fn drop(&mut self) {
+        log::info!(
+            "clipboard native_read end group={} sequence={} elapsed_ms={}",
+            self.format_group,
+            self.sequence,
+            self.started.elapsed().as_millis()
+        );
+    }
+}
+
 /// 持有一个 [`ClipboardContext`] 的读取器。轻量，可按需创建；
 /// 监听线程（2.2）会持有一个长生命周期实例复用。
 pub struct ClipboardReader {
@@ -151,6 +185,8 @@ impl ClipboardReader {
 
         let files: Vec<String> = {
             #[cfg(target_os = "windows")]
+            let _stage = NativeClipboardStage::begin("CF_HDROP");
+            #[cfg(target_os = "windows")]
             let _access = super::lock_windows_capture()?;
             self.ctx
                 .get_files()
@@ -234,6 +270,7 @@ impl ClipboardReader {
     #[cfg(target_os = "windows")]
     fn read_text_payload(&self, capture: &Capture) -> Result<Option<TextPayload>> {
         use clipboard_win::{formats, get};
+        let _stage = NativeClipboardStage::begin("text_formats");
         let _access = super::lock_windows_capture()?;
         let _clipboard_lock = clipboard_win::Clipboard::new_attempts(10).map_err(|err| {
             AppError::Clipboard(format!("Windows clipboard text snapshot busy: {err}"))
@@ -242,13 +279,24 @@ impl ClipboardReader {
         let mut html = None;
         let mut rtf = None;
         if clipboard_win::is_format_avail(formats::CF_UNICODETEXT) {
+            log::info!("clipboard native_read request=CF_UNICODETEXT");
             text = get(formats::Unicode).map_err(clip_err)?;
+        }
+        // A user paste must not wait for a second optional delayed-rendered
+        // format after a usable plain-text snapshot has already been obtained.
+        if super::windows_write_pending() {
+            return if text.is_empty() {
+                Err(AppError::Clipboard("Windows clipboard busy: EcoPaste write pending".to_owned()))
+            } else {
+                Ok(Some(TextPayload { text, html, rtf }))
+            };
         }
         if capture.html {
             let format = formats::Html::new().ok_or_else(|| {
                 AppError::Clipboard("register Windows HTML format failed".to_owned())
             })?;
             if clipboard_win::is_format_avail(format.code()) {
+                log::info!("clipboard native_read request=HTML");
                 match get::<String, _>(format) {
                     Ok(value) => html = non_empty_string(value),
                     Err(err) if !text.is_empty() => log::warn!("read optional clipboard HTML failed: {err}"),
@@ -256,11 +304,19 @@ impl ClipboardReader {
                 }
             }
         }
+        if super::windows_write_pending() {
+            return if text.is_empty() && html.is_none() {
+                Err(AppError::Clipboard("Windows clipboard busy: EcoPaste write pending".to_owned()))
+            } else {
+                Ok(Some(TextPayload { text, html, rtf }))
+            };
+        }
         if capture.rtf {
             let format = clipboard_win::register_format("Rich Text Format").ok_or_else(|| {
                 AppError::Clipboard("register Windows RTF format failed".to_owned())
             })?;
             if clipboard_win::is_format_avail(format.get()) {
+                log::info!("clipboard native_read request=RTF");
                 match get::<Vec<u8>, _>(formats::RawData(format.get())) {
                     Ok(bytes) => rtf = non_empty_string(String::from_utf8_lossy(&bytes).trim_end_matches('\0').to_owned()),
                     Err(err) if !text.is_empty() || html.is_some() => log::warn!("read optional clipboard RTF failed: {err}"),
@@ -372,12 +428,17 @@ impl ClipboardReader {
         if formats.is_empty() {
             return Ok(None);
         }
+        let _stage = NativeClipboardStage::begin("PNG_formats");
         let _access = super::lock_windows_capture()?;
         let _clip = WindowsClipboard::new().map_err(|err| {
             AppError::Clipboard(format!("Windows clipboard busy reading PNG: {err}"))
         })?;
         let mut last_error = None;
         for format in formats {
+            if super::windows_write_pending() {
+                return Err(AppError::Clipboard("Windows clipboard busy: EcoPaste write pending".to_owned()));
+            }
+            log::info!("clipboard native_read request=PNG format_id={format}");
             let mut data = Vec::new();
             match clipboard_raw::get_vec(format, &mut data) {
                 Ok(_) if !data.is_empty() && png_dimensions(&data).is_some() => {
@@ -412,12 +473,17 @@ impl ClipboardReader {
         if formats.is_empty() {
             return Ok(None);
         }
+        let _stage = NativeClipboardStage::begin("DIB_formats");
         let _access = super::lock_windows_capture()?;
         let _clip = WindowsClipboard::new().map_err(|err| {
             AppError::Clipboard(format!("Windows clipboard busy reading DIB: {err}"))
         })?;
         let mut last_error = None;
         for format in formats {
+            if super::windows_write_pending() {
+                return Err(AppError::Clipboard("Windows clipboard busy: EcoPaste write pending".to_owned()));
+            }
+            log::info!("clipboard native_read request=DIB format_id={format}");
             let mut data = Vec::new();
             match clipboard_raw::get_vec(format, &mut data) {
                 Ok(_) if !data.is_empty() => return Ok(Some(data)),
