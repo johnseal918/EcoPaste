@@ -66,13 +66,16 @@ fn windows_write_pending() -> bool {
 // worker polls this flag and can be retired if it is stuck in WM_RENDERFORMAT.
 #[cfg(target_os = "windows")]
 struct WindowsWriteGate {
-    _access: std::sync::MutexGuard<'static, ()>,
+    access: Option<std::sync::MutexGuard<'static, ()>>,
 }
 
 #[cfg(target_os = "windows")]
 impl Drop for WindowsWriteGate {
     fn drop(&mut self) {
         use std::sync::atomic::Ordering;
+        // Release the native-operation mutex before announcing that another
+        // capture may begin.
+        self.access.take();
         WINDOWS_WRITE_WAITING.fetch_sub(1, Ordering::Release);
     }
 }
@@ -90,7 +93,7 @@ fn lock_windows_write() -> crate::core::Result<WindowsWriteGate> {
         };
         if let Some(guard) = guard {
             log::info!("clipboard write gate acquired wait_ms={}", started.elapsed().as_millis());
-            return Ok(WindowsWriteGate { _access: guard });
+            return Ok(WindowsWriteGate { access: Some(guard) });
         }
         if started.elapsed() >= std::time::Duration::from_secs(2) {
             WINDOWS_WRITE_WAITING.fetch_sub(1, Ordering::Release);
