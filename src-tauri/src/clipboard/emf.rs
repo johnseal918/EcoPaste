@@ -50,6 +50,12 @@ fn snapshot_emf() -> Result<OwnedEmf> {
     let _clipboard = WindowsClipboard::new().map_err(|err| {
         AppError::Clipboard(format!("Excel metafile clipboard busy: {err}"))
     })?;
+    if super::windows_write_pending() {
+        return Err(AppError::Clipboard(
+            "Windows clipboard busy: EcoPaste write pending".to_owned(),
+        ));
+    }
+    log::info!("clipboard native_read request=CF_ENHMETAFILE owner_hint=Excel");
     unsafe {
         let borrowed = GetClipboardData(CF_ENHMETAFILE) as HENHMETAFILE;
         if borrowed.is_null() {
