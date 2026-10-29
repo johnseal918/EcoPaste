@@ -12,8 +12,9 @@ use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
 use winapi::um::winuser::{IsClipboardFormatAvailable, RegisterClipboardFormatW};
 #[cfg(target_os = "windows")]
 use clipboard_win::{raw as clipboard_raw, Clipboard as WindowsClipboard};
+use std::time::Duration;
 #[cfg(target_os = "windows")]
-use std::time::{Duration, Instant};
+use std::time::Instant;
 #[cfg(target_os = "windows")]
 use std::sync::Mutex;
 #[cfg(target_os = "windows")]
