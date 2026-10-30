@@ -296,8 +296,8 @@ impl Drop for WorkerProcess {
         if !self.poll_exit() {
             self.request_stop();
         }
-        self.reply_reader.take();
-        self.diagnostic_reader.take();
+        let _ = self.reply_reader.take();
+        let _ = self.diagnostic_reader.take();
     }
 }
 
@@ -358,7 +358,16 @@ impl WorkerSession {
             self.blocked_sequence = None;
         }
         if self.process.is_none() {
-            self.process = Some(WorkerProcess::spawn()?);
+            match WorkerProcess::spawn() {
+                Ok(worker) => self.process = Some(worker),
+                Err(err) => {
+                    // A missing executable/permission error will not resolve
+                    // by spawning the same helper 10 times per sequence.
+                    self.blocked_sequence = Some(sequence);
+                    log::warn!("clipboard helper spawn failed sequence={sequence}");
+                    return Err(err);
+                }
+            }
         }
         let request = Request {
             capture: capture.clone(),
