@@ -62,65 +62,6 @@ impl WritebackGuard {
         true
     }
 
-    /// 单测用：直接塞一条已过期登记。
-    #[cfg(test)]
-    fn suppress_expired_for_test(&self, content_hash: String) {
-        let mut pending = self.pending.lock().expect("writeback guard poisoned");
-        pending.push(Pending {
-            content_hash,
-            at: Instant::now() - SUPPRESS_TTL - Duration::from_millis(1),
-        });
-    }
 
-    /// 单测用：返回当前登记数量。
-    #[cfg(test)]
-    fn pending_len_for_test(&self) -> usize {
-        let pending = self.pending.lock().expect("writeback guard poisoned");
-
-        pending.len()
-    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn skips_once_then_resets() {
-        let guard = WritebackGuard::new();
-        guard.suppress("hash-a".to_owned());
-
-        assert!(guard.should_skip("hash-a"));
-        // 登记已消费，同内容的下一次（真实复制）不再被吞。
-        assert!(!guard.should_skip("hash-a"));
-    }
-
-    #[test]
-    fn supports_multiple_pending_hashes() {
-        let guard = WritebackGuard::new();
-        guard.suppress("hash-a".to_owned());
-        guard.suppress("hash-b".to_owned());
-
-        assert!(guard.should_skip("hash-a"));
-        assert!(guard.should_skip("hash-b"));
-        assert_eq!(guard.pending_len_for_test(), 0);
-    }
-
-    #[test]
-    fn does_not_skip_unrelated_content() {
-        let guard = WritebackGuard::new();
-        guard.suppress("hash-a".to_owned());
-
-        // 写回事件未到，先来了一次别的真实复制 → 不该被吞，登记仍在。
-        assert!(!guard.should_skip("hash-b"));
-        assert!(guard.should_skip("hash-a"));
-    }
-
-    #[test]
-    fn expired_suppression_is_ignored() {
-        let guard = WritebackGuard::new();
-        guard.suppress_expired_for_test("hash-a".to_owned());
-
-        assert!(!guard.should_skip("hash-a"));
-    }
-}

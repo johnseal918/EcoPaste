@@ -1,0 +1,15 @@
+{
+  "collected_at_utc": "2026-10-28T08:43:53.755511+00:00",
+  "base_commit": "24d1c8bfd2c6f4579830c2d92995bd18f4f3947e",
+  "working_branch": "fix/windows-clipboard-access-20261028",
+  "installed_filename": "EcoPaste_ExcelClipboardFix_V3_Portable.exe",
+  "installed_sha256": "a2bcf20a61562904445b3bef84b01a277b75bcd1247d176960be3e070b3668c6",
+  "candidate_sha256": "A2BCF20A61562904445B3BEF84B01A277B75BCD1247D176960BE3E070B3668C6",
+  "prior_v3_sha256": "A9CB7EE23AF2C6EEDDA9BFF964E00B4B8F59F064317185559307789557149975",
+  "production_build_exit": 0,
+  "lock_regression_exit": 0,
+  "os_version": "10.0.22631",
+  "architecture": "AMD64",
+  "disposition": "FAILED_BUSINESS_ACCEPTANCE_USER_REPORTED_STILL_NOT_WORKING",
+  "binary_name_warning": "The V3 filename was retained to preserve startup paths; identify the replaced executable by SHA-256."
+}

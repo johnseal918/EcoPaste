@@ -1,0 +1,446 @@
+diff --git a/src-tauri/Cargo.lock b/src-tauri/Cargo.lock
+index b94638a..434afab 100644
+--- a/src-tauri/Cargo.lock
++++ b/src-tauri/Cargo.lock
+@@ -5770,21 +5770,9 @@ dependencies = [
+  "mio",
+  "pin-project-lite",
+  "socket2",
+- "tokio-macros",
+  "windows-sys 0.61.2",
+ ]
+ 
+-[[package]]
+-name = "tokio-macros"
+-version = "2.7.2"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
+-dependencies = [
+- "proc-macro2",
+- "quote",
+- "syn 3.0.3",
+-]
+-
+ [[package]]
+ name = "tokio-rustls"
+ version = "0.26.4"
+diff --git a/src-tauri/src/clipboard/mod.rs b/src-tauri/src/clipboard/mod.rs
+index 02dc4ba..cc79635 100644
+--- a/src-tauri/src/clipboard/mod.rs
++++ b/src-tauri/src/clipboard/mod.rs
+@@ -17,6 +17,52 @@ mod storage;
+ mod watcher;
+ mod write;
+ 
++// OpenClipboard(NULL) is not a mutex between threads in the same process:
++// either thread's CloseClipboard invalidates the other's open transaction.
++#[cfg(target_os = "windows")]
++static WINDOWS_ACCESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
++
++#[cfg(target_os = "windows")]
++fn lock_windows_write() -> crate::core::Result<std::sync::MutexGuard<'static, ()>> {
++    // ponytail: one process-wide lock; bound waiting for delayed source rendering.
++    for attempt in 0..=25 {
++        match WINDOWS_ACCESS.try_lock() {
++            Ok(access) => return Ok(access),
++            Err(std::sync::TryLockError::Poisoned(err)) => return Ok(err.into_inner()),
++            Err(std::sync::TryLockError::WouldBlock) if attempt < 25 => {
++                std::thread::sleep(std::time::Duration::from_millis(10));
++            }
++            Err(_) => break,
++        }
++    }
++    Err(crate::core::AppError::Clipboard(
++        "EcoPaste is still reading the clipboard; please retry shortly".to_owned(),
++    ))
++}
++
++#[cfg(all(test, target_os = "windows"))]
++mod windows_access_regression {
++    #[test]
++    fn active_transaction_survives_competing_capture_and_write() {
++        let _access = super::WINDOWS_ACCESS.lock().unwrap();
++        let _clipboard = clipboard_win::Clipboard::new_attempts(10).unwrap();
++        let (capture_busy, write_busy) = std::thread::spawn(|| {
++            let reader = super::ClipboardReader::new().unwrap();
++            (
++                reader.read_with_capture(&crate::settings::Capture::default()).is_err(),
++                super::lock_windows_write().is_err(),
++            )
++        }).join().unwrap();
++        assert!(capture_busy && write_busy);
++        unsafe {
++            windows::Win32::Foundation::SetLastError(windows::Win32::Foundation::WIN32_ERROR(0));
++            windows::Win32::System::DataExchange::EnumClipboardFormats(0);
++            windows::Win32::Foundation::GetLastError()
++                .expect("competing operations must not close the active clipboard transaction");
++        }
++    }
++}
++
+ pub use app_store::AppIconStore;
+ pub use apps_registry::{
+     add_app_from_path, delete_unreferenced_apps, refresh_running_apps, AppsRegistry,
+diff --git a/src-tauri/src/clipboard/read.rs b/src-tauri/src/clipboard/read.rs
+index 5ea3444..921371e 100644
+--- a/src-tauri/src/clipboard/read.rs
++++ b/src-tauri/src/clipboard/read.rs
+@@ -7,8 +7,6 @@
+ //! 仅当源是 TIFF/DIB 等非 PNG 时才回退到库的解码 + 重编码 PNG。
+ 
+ use clipboard_rs::common::RustImage;
+-#[cfg(target_os = "windows")]
+-use clipboard_rs::ClipboardContent;
+ use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
+ #[cfg(target_os = "windows")]
+ use winapi::um::winuser::{IsClipboardFormatAvailable, RegisterClipboardFormatW};
+@@ -41,6 +39,16 @@ impl ClipboardReader {
+     ///
+     /// 同一次复制可能同时存在文件、图片、HTML、RTF、纯文本表示；这里只返回第一个启用且可读取的类型。
+     pub fn read_with_capture(&self, capture: &Capture) -> Result<Option<ClipboardPayload>> {
++        #[cfg(target_os = "windows")]
++        let _access = match super::WINDOWS_ACCESS.try_lock() {
++            Ok(access) => access,
++            Err(std::sync::TryLockError::Poisoned(err)) => err.into_inner(),
++            Err(std::sync::TryLockError::WouldBlock) => {
++                return Err(AppError::Clipboard(
++                    "Windows clipboard text snapshot busy: EcoPaste write in progress".to_owned(),
++                ));
++            }
++        };
+         // During Excel copy the delayed bitmap can precede BIFF publication.
+         // Prefer available Unicode text without triggering the delayed picture
+         // even when the BIFF metadata is temporarily absent. Picture-only copies
+@@ -71,6 +79,13 @@ impl ClipboardReader {
+             }
+         }
+ 
++        // WeChat publishes an image together with its temporary file drop.
++        // Preserve the copied picture instead of recording only that file path.
++        #[cfg(target_os = "windows")]
++        if capture.image && self.ctx.has(ContentFormat::Image) && source::clipboard_owner_is_wechat() {
++            return self.read_image().map(|image| image.map(ClipboardPayload::Image));
++        }
++
+         let mut text_payload: Option<Option<TextPayload>> = None;
+ 
+         for kind in capture.ordered_kinds() {
+@@ -193,41 +208,42 @@ impl ClipboardReader {
+ 
+     /// 读取剪贴板中的文本族表示，包含纯文本、HTML 和 RTF。
+     ///
+-    /// Windows 读取时必须由我们先获得真正的剪贴板锁，再批量读出文本/HTML/RTF。
+-    /// clipboard-rs 0.3.5 的 Windows get() 错误地忽略 OpenClipboard 失败，
+-    /// 并把格式读取失败变为 Ok([])。由此造成的“空内容”会让 watcher 静默漏记。
+-    /// 外层锁确保所有文本表示来自同一版本；若被其它程序占用则向上返回 Err，
+-    /// 让 watcher 在尚未确认 sequence 前重试。
++    /// Open once and use raw getters; clipboard-rs::get nests OpenClipboard,
++    /// ignores acquisition/read errors and can turn a failed read into Ok([]).
+     #[cfg(target_os = "windows")]
+     fn read_text_payload(&self, capture: &Capture) -> Result<Option<TextPayload>> {
+-        let mut formats = vec![ContentFormat::Text];
+-        if capture.html {
+-            formats.push(ContentFormat::Html);
+-        }
+-        if capture.rtf {
+-            formats.push(ContentFormat::Rtf);
+-        }
+-
+-        // clipboard-rs 0.3.5's get() internally ignores ClipboardWin::new_attempts
+-        // failures and then converts each format read failure into an empty result.
+-        // The external RAII lock is intentionally acquired first and kept alive
+-        // across get(). Its nested open failure is ignored upstream, while the
+-        // actual clipboard_win::get calls use our already open clipboard handle.
+-        // If acquisition fails, propagate Err instead of a false Ok(None).
++        use clipboard_win::{formats, get};
+         let _clipboard_lock = clipboard_win::Clipboard::new_attempts(10).map_err(|err| {
+             AppError::Clipboard(format!("Windows clipboard text snapshot busy: {err}"))
+         })?;
+-        let contents = self.ctx.get(&formats).map_err(clip_err)?;
+         let mut text = String::new();
+         let mut html = None;
+         let mut rtf = None;
+-
+-        for content in contents {
+-            match content {
+-                ClipboardContent::Text(value) => text = value,
+-                ClipboardContent::Html(value) => html = non_empty_string(value),
+-                ClipboardContent::Rtf(value) => rtf = non_empty_string(value),
+-                _ => {}
++        if clipboard_win::is_format_avail(formats::CF_UNICODETEXT) {
++            text = get(formats::Unicode).map_err(clip_err)?;
++        }
++        if capture.html {
++            let format = formats::Html::new().ok_or_else(|| {
++                AppError::Clipboard("register Windows HTML format failed".to_owned())
++            })?;
++            if clipboard_win::is_format_avail(format.code()) {
++                match get::<String, _>(format) {
++                    Ok(value) => html = non_empty_string(value),
++                    Err(err) if !text.is_empty() => log::warn!("read optional clipboard HTML failed: {err}"),
++                    Err(err) => return Err(clip_err(err)),
++                }
++            }
++        }
++        if capture.rtf {
++            let format = clipboard_win::register_format("Rich Text Format").ok_or_else(|| {
++                AppError::Clipboard("register Windows RTF format failed".to_owned())
++            })?;
++            if clipboard_win::is_format_avail(format.get()) {
++                match get::<Vec<u8>, _>(formats::RawData(format.get())) {
++                    Ok(bytes) => rtf = non_empty_string(String::from_utf8_lossy(&bytes).trim_end_matches('\0').to_owned()),
++                    Err(err) if !text.is_empty() || html.is_some() => log::warn!("read optional clipboard RTF failed: {err}"),
++                    Err(err) => return Err(clip_err(err)),
++                }
+             }
+         }
+ 
+diff --git a/src-tauri/src/clipboard/source.rs b/src-tauri/src/clipboard/source.rs
+index 2949ef9..c270655 100644
+--- a/src-tauri/src/clipboard/source.rs
++++ b/src-tauri/src/clipboard/source.rs
+@@ -81,6 +81,13 @@ pub fn clipboard_owner_pid() -> Option<u32> {
+     windows::capture_clipboard_owner_pid()
+ }
+ 
++#[cfg(target_os = "windows")]
++pub fn clipboard_owner_is_wechat() -> bool {
++    windows::capture_clipboard_owner_pid()
++        .and_then(windows::from_pid)
++        .is_some_and(|app| app.name.eq_ignore_ascii_case("Weixin") || app.name.eq_ignore_ascii_case("WeChat"))
++}
++
+ /// 把轻量来源提示解析成稳定应用信息。这个函数允许放到后台线程执行。
+ pub fn resolve_frontmost_hint(hint: FrontmostHint) -> Option<FrontmostApp> {
+     match hint {
+diff --git a/src-tauri/src/clipboard/write.rs b/src-tauri/src/clipboard/write.rs
+index 890d479..826a9df 100644
+--- a/src-tauri/src/clipboard/write.rs
++++ b/src-tauri/src/clipboard/write.rs
+@@ -16,7 +16,9 @@
+ //! 缺失时退回 `content`。供「纯文本粘贴」快捷路径使用。
+ 
+ use clipboard_rs::common::RustImage;
+-use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext, RustImageData};
++#[cfg(not(target_os = "windows"))]
++use clipboard_rs::Clipboard;
++use clipboard_rs::{ClipboardContent, ClipboardContext, RustImageData};
+ 
+ use super::guard::WritebackGuard;
+ use super::storage::ImageStore;
+@@ -32,24 +34,27 @@ pub fn write_to_clipboard(
+     plain: bool,
+     app: Option<&tauri::AppHandle>,
+ ) -> Result<()> {
++    #[cfg(target_os = "windows")]
++    let _access = super::lock_windows_write()?;
+     let ctx = ClipboardContext::new().map_err(clip_err)?;
+ 
+     match item.kind {
+-        ClipboardKind::Text => write_text(&ctx, guard, item, plain)?,
++        ClipboardKind::Text => write_text(&ctx, guard, item, plain, app)?,
+         ClipboardKind::Image => write_image(&ctx, store, guard, item, app)?,
+         // files + plain：把路径列表当文本写回，供「粘贴为路径」使用。
+-        ClipboardKind::Files if plain => write_files_as_text(&ctx, guard, item)?,
+-        ClipboardKind::Files => write_files(&ctx, guard, item)?,
++        ClipboardKind::Files if plain => write_files_as_text(&ctx, guard, item, app)?,
++        ClipboardKind::Files => write_files(&ctx, guard, item, app)?,
+     }
+     Ok(())
+ }
+ 
+ /// 编辑器临时纯文本写回：不创建历史记录，复用既有回环抑制。
+-pub fn write_edited_plain_text(guard: &WritebackGuard, text: &str) -> Result<()> {
++pub fn write_edited_plain_text(guard: &WritebackGuard, text: &str, app: &tauri::AppHandle) -> Result<()> {
++    #[cfg(target_os = "windows")]
++    let _access = super::lock_windows_write()?;
+     let ctx = ClipboardContext::new().map_err(clip_err)?;
+     guard.suppress(content_hash(ClipboardKind::Text, text));
+-    ctx.set(vec![ClipboardContent::Text(text.to_owned())])
+-        .map_err(clip_err)
++    set_contents(&ctx, vec![ClipboardContent::Text(text.to_owned())], Some(app))
+ }
+ 
+ fn write_text(
+@@ -57,6 +62,7 @@ fn write_text(
+     guard: &WritebackGuard,
+     item: &ClipboardItem,
+     plain: bool,
++    app: Option<&tauri::AppHandle>,
+ ) -> Result<()> {
+     // 纯文本模式下，OS 提供的 plain 表示优先；缺失时退回 content（plain 文本场景下 content 即纯文本）。
+     let (content, sub_kind) = if plain {
+@@ -73,32 +79,28 @@ fn write_text(
+ 
+     match sub_kind {
+         // 纯文本模式必须只写 Text flavor，确保清掉剪贴板中可能残留的 HTML/RTF。
+-        None if plain => ctx
+-            .set(vec![ClipboardContent::Text(content)])
+-            .map_err(clip_err)?,
++        None if plain => set_contents(ctx, vec![ClipboardContent::Text(content)], app)?,
+         // HTML / RTF 必须同时写入纯文本回退：clipboard-rs 的 set_html / set_rich_text
+         // 会先 clearContents，单独写时只剩富格式，多数应用读 plain/text 拿不到就拒绝粘贴。
+         // 走 set(Vec<ClipboardContent>) 一次写多格式（内部不再相互清空）。
+         Some(ClipboardSubKind::Html) => {
+             let plain = item.search_text.clone().unwrap_or_else(|| content.clone());
+             guard.suppress(content_hash(ClipboardKind::Text, &plain));
+-            ctx.set(vec![
++            set_contents(ctx, vec![
+                 ClipboardContent::Text(plain),
+                 ClipboardContent::Html(content),
+-            ])
+-            .map_err(clip_err)?;
++            ], app)?;
+         }
+         Some(ClipboardSubKind::Rtf) => {
+             let plain = item.search_text.clone().unwrap_or_else(|| content.clone());
+             guard.suppress(content_hash(ClipboardKind::Text, &plain));
+-            ctx.set(vec![
++            set_contents(ctx, vec![
+                 ClipboardContent::Text(plain),
+                 ClipboardContent::Rtf(content),
+-            ])
+-            .map_err(clip_err)?;
++            ], app)?;
+         }
+         // url / email / color / path 及无 sub_kind 都走纯文本通道。
+-        _ => ctx.set_text(content).map_err(clip_err)?,
++        _ => set_contents(ctx, vec![ClipboardContent::Text(content)], app)?,
+     }
+     Ok(())
+ }
+@@ -215,7 +217,7 @@ fn write_image_windows(image: &RustImageData, app: Option<&tauri::AppHandle>) ->
+     let png_format = clipboard_win::register_format("PNG").ok_or_else(|| {
+         AppError::Clipboard("register Windows PNG clipboard format failed".to_owned())
+     })?;
+-    let _clipboard = open_windows_image_clipboard(app)?;
++    let _clipboard = open_windows_clipboard(app)?;
+     raw::empty().map_err(|err| {
+         AppError::Clipboard(format!("clear Windows clipboard for image failed: {err}"))
+     })?;
+@@ -242,7 +244,7 @@ fn write_image_windows(image: &RustImageData, app: Option<&tauri::AppHandle>) ->
+ }
+ 
+ #[cfg(target_os = "windows")]
+-fn open_windows_image_clipboard(
++fn open_windows_clipboard(
+     app: Option<&tauri::AppHandle>,
+ ) -> Result<clipboard_win::Clipboard> {
+     use tauri::Manager;
+@@ -258,8 +260,7 @@ fn open_windows_image_clipboard(
+         }
+         hwnd.0 as clipboard_win::types::HWND
+     } else {
+-        // Only legacy desktop-only tests call this path without an AppHandle.
+-        std::ptr::null_mut()
++        return Err(AppError::Clipboard("Windows clipboard write requires an application window".to_owned()));
+     };
+     let mut last_error = String::new();
+     for delay_ms in [0, 10, 30, 70, 140] {
+@@ -272,11 +273,11 @@ fn open_windows_image_clipboard(
+         }
+     }
+     Err(AppError::Clipboard(format!(
+-        "open Windows clipboard for image failed: {last_error}"
++        "open Windows clipboard for write failed: {last_error}"
+     )))
+ }
+ 
+-fn write_files(ctx: &ClipboardContext, guard: &WritebackGuard, item: &ClipboardItem) -> Result<()> {
++fn write_files(ctx: &ClipboardContext, guard: &WritebackGuard, item: &ClipboardItem, app: Option<&tauri::AppHandle>) -> Result<()> {
+     let paths: Vec<String> = item
+         .content
+         .split('\n')
+@@ -288,7 +289,7 @@ fn write_files(ctx: &ClipboardContext, guard: &WritebackGuard, item: &ClipboardI
+     }
+ 
+     guard.suppress(item.content_hash.clone());
+-    ctx.set_files(paths).map_err(clip_err)?;
++    set_contents(ctx, vec![ClipboardContent::Files(paths)], app)?;
+     Ok(())
+ }
+ 
+@@ -298,14 +299,51 @@ fn write_files_as_text(
+     ctx: &ClipboardContext,
+     guard: &WritebackGuard,
+     item: &ClipboardItem,
++    app: Option<&tauri::AppHandle>,
+ ) -> Result<()> {
+     let text = item.content.clone();
+ 
+     guard.suppress(content_hash(ClipboardKind::Text, &text));
+-    ctx.set_text(text).map_err(clip_err)?;
++    set_contents(ctx, vec![ClipboardContent::Text(text)], app)?;
+     Ok(())
+ }
+ 
++/// Publish every requested format in one checked transaction. Do not call
++/// clipboard-rs::set here: it ignores both open and per-format write failures.
++fn set_contents(ctx: &ClipboardContext, contents: Vec<ClipboardContent>, app: Option<&tauri::AppHandle>) -> Result<()> {
++    #[cfg(not(target_os = "windows"))]
++    {
++        let _ = app;
++        ctx.set(contents).map_err(clip_err)
++    }
++    #[cfg(target_os = "windows")]
++    {
++        use clipboard_win::{options, raw};
++        let _ = ctx;
++        let html = clipboard_win::formats::Html::new().ok_or_else(|| {
++            AppError::Clipboard("register Windows HTML format failed".to_owned())
++        })?;
++        let rtf = clipboard_win::register_format("Rich Text Format").ok_or_else(|| {
++            AppError::Clipboard("register Windows RTF format failed".to_owned())
++        })?;
++        if contents.iter().any(|value| !matches!(value, ClipboardContent::Text(_) | ClipboardContent::Html(_) | ClipboardContent::Rtf(_) | ClipboardContent::Files(_))) {
++            return Err(AppError::Clipboard("unsupported Windows clipboard write format".to_owned()));
++        }
++        let _clipboard = open_windows_clipboard(app)?;
++        raw::empty().map_err(clip_err)?;
++        for content in contents {
++            match content {
++                ClipboardContent::Text(text) => raw::set_string_with(&text, options::NoClear),
++                ClipboardContent::Html(text) => raw::set_html_with(html.code(), &text, options::NoClear),
++                ClipboardContent::Rtf(text) => raw::set_without_clear(rtf.get(), text.as_bytes()),
++                ClipboardContent::Files(paths) => raw::set_file_list_with(&paths, options::NoClear),
++                _ => unreachable!("formats validated before opening clipboard"),
++            }.map_err(clip_err)?;
++        }
++        Ok(())
++    }
++}
++
+ fn clip_err<E: std::fmt::Display>(err: E) -> AppError {
+     AppError::Clipboard(err.to_string())
+ }
+diff --git a/src-tauri/src/commands/clipboard.rs b/src-tauri/src/commands/clipboard.rs
+index 8c433e5..de8a1f8 100644
+--- a/src-tauri/src/commands/clipboard.rs
++++ b/src-tauri/src/commands/clipboard.rs
+@@ -494,7 +494,7 @@ pub async fn update_edited_clipboard_text(
+         }
+     }
+     if paste_after_save {
+-        if let Err(error) = write_edited_plain_text(guard.inner().as_ref(), &text) {
++        if let Err(error) = write_edited_plain_text(guard.inner().as_ref(), &text, &app) {
+             return Err(AppError::Clipboard(format!(
+                 "text was saved, but copying for paste failed: {error}"
+             )));
+@@ -520,7 +520,7 @@ pub async fn copy_edited_clipboard_text(
+     validate_edited_text(&text)?;
+     let pool = db.pool().await;
+     check_edit_source(&app, &pool, &source_id).await?;
+-    write_edited_plain_text(guard.inner().as_ref(), &text)
++    write_edited_plain_text(guard.inner().as_ref(), &text, &app)
+ }
+ 
+ /// 临时粘贴编辑结果，复用原有写回保护和系统粘贴，不新建历史记录。
+@@ -535,7 +535,7 @@ pub async fn paste_edited_clipboard_text(
+     validate_edited_text(&text)?;
+     let pool = db.pool().await;
+     check_edit_source(&app, &pool, &source_id).await?;
+-    write_edited_plain_text(guard.inner().as_ref(), &text)?;
++    write_edited_plain_text(guard.inner().as_ref(), &text, &app)?;
+     finish_paste(&app, true).await
+ }
+ 

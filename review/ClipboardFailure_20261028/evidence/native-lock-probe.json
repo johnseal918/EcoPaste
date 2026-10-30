@@ -1,0 +1,11 @@
+{
+  "at_utc": "2026-10-28T08:38:10.067471+00:00",
+  "scope": "native API mechanism only; not an application trace",
+  "initial_open": true,
+  "nested_open": true,
+  "enum_error_after_nested_close": 1418,
+  "cross_thread_initial_open": true,
+  "second_thread_open": true,
+  "first_thread_enum_error_after_second_close": 1418,
+  "clipboard_sequence_unchanged": true
+}

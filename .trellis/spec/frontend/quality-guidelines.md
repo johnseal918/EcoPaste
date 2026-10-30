@@ -1,36 +1,8 @@
 # Quality Guidelines
 
-## Commands
+## Current software result
 
-Use these checks for frontend work:
-
-```bash
-pnpm lint
-pnpm tsc
-```
-
-`pnpm lint` runs Biome. `pnpm tsc` checks TypeScript without emitting. There is
-no frontend test runner configured in this repository, so UI changes also need
-a manual app run through the affected path.
-
-For full cross-layer changes, also run Rust checks:
-
-```bash
-cd src-tauri
-cargo fmt
-cargo clippy -- -D warnings
-cargo test
-```
-
-## Biome Rules That Matter
-
-`biome.json` enforces sorted imports/classes/properties, no unused imports or
-variables, no `console.*`, self-closing JSX, and strict unused template literal
-cleanup. `noDangerouslySetInnerHtml` is disabled for narrow, sanitizer-owned
-escape hatches; page components should still avoid direct raw HTML injection.
-
-Use `@/utils/log` instead of console logging. Keep imports organized by Biome
-rather than hand-sorting in a different style.
+An additional run is necessary only when it directly confirms a user-agreed current business outcome, uses the real application's normal business flow with the relevant real input or deliverable, and resolves a specific gap in the existing applicable evidence. If existing evidence already answers that outcome, perform zero additional runs; an actual delivery operation that supplies the evidence already completes this work without a separate test phase. Running a script, changing code or SHA, or starting a new chat is not a reason to rerun. Unit, mock, synthetic-fixture, static/style, coverage, historical-suite, and governance checks are excluded. If a real business flow fails, fix only that blocked flow within the assigned scope; do not require all-green results, a fixed matrix, or unrelated repairs. Necessary build/packaging remains available without added tests. Preserve actual permissions, data protections, accepted behavior, and the user's delivery standard.
 
 ## Required Frontend Patterns
 
@@ -43,31 +15,9 @@ rather than hand-sorting in a different style.
 - Use `cn` for conditional classes.
 - Sanitize user-provided HTML/SVG with DOMPurify at the rendering boundary.
 
-## UI Verification
+## Current preview behavior
 
-For UI changes, manually verify the main path and at least one boundary case:
-
-- Clipboard list: empty state, search, scroll pagination, pinned/favorite item,
-  hidden-window update behavior if events changed.
-- Preview: text, HTML/RTF, image, files, missing files, sensitive redaction.
-- Preferences: setting commit, reset, search, both language files, relevant side
-  effects such as shortcut/tray/autostart.
-- Window changes: main, preference, and preview windows on the affected platform.
-
-If a change affects macOS NSPanel timing or Windows non-focusable keyboard
-navigation, manual desktop validation is required. Type checks cannot cover
-those paths.
-
-## Review Checklist
-
-- Does the layer ownership match the Rust-first boundary?
-- Are command/event names centralized and mirrored?
-- Are new user-visible strings present in both locales?
-- Does the UI render backend-prepared fields instead of recomputing business
-  rules?
-- Does a hidden or dormant window need deferred work instead of immediate IPC?
-- Are Ant Design token colors used instead of hard-coded colors?
-- Did the change avoid global `.ant-*` overrides unless no semantic slot exists?
+For the current preview recovery goal, select only the unresolved real application behavior after identifying the concrete evidence gap. Switching cards, reopening after idle, and side-panel preview are context for that choice, not a fixed checklist. Reuse applicable evidence, including the delivery operation itself.
 
 ## Scenario: Release Versioning
 
@@ -114,18 +64,6 @@ those paths.
 - Base: `pnpm release-rc` opens release-it's version prompt with RC choices.
 - Bad: letting the conventional-changelog recommended bump choose the prerelease
   base can jump to an unintended prerelease version after feature commits.
-
-### 6. Tests Required
-
-- Run `pnpm lint` and `pnpm tsc` after changing release scripts.
-- Run `pnpm release --dry-run --ci --no-git.push` on a clean tree, or add
-  `--no-git.requireCleanWorkingDir` only while validating uncommitted local
-  changes.
-- Verify dry-run output includes the expected `npm version`, bumper writes for
-  both Cargo files, release commit message, and `v${version}` tag.
-- Verify current metadata alignment: `package.json.version`,
-  `src-tauri/Cargo.toml`, the root `EcoPaste` entry in `src-tauri/Cargo.lock`,
-  and Tauri's package-json version pointer.
 
 ### 7. Wrong vs Correct
 

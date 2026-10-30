@@ -1,0 +1,59 @@
+{
+  "baseline_date": "2026-10-29",
+  "tag": "baseline/windows-clipboard-20261029",
+  "source_parent": "43393b7ee58df291d24a3b0c6e85e9a0f75cdbf6",
+  "compiled_source_git_blobs": {
+    "src-tauri/src/commands/clipboard.rs": "7f73900f9883cf6cece2a772e41579fa3778ec95",
+    "src-tauri/Cargo.lock": "434afab0b433d66327779beed3de2b608acaac26"
+  },
+  "binary": {
+    "filename": "EcoPaste_GPTFix_43393b7_Portable.exe",
+    "bytes": 27456512,
+    "sha256": "645cb30e38002ee4189a9390580591bbb2f7aa63bfbc203558a87e90127f2699"
+  },
+  "build": {
+    "target": "x86_64-pc-windows-msvc",
+    "exit_code": 0,
+    "command": "pnpm tauri build --no-bundle --target x86_64-pc-windows-msvc --config .build-env/tauri.local-bundle.json",
+    "local_bundle_config": {
+      "bundle": {
+        "createUpdaterArtifacts": false
+      }
+    },
+    "cargo_lock_note": "Cargo removed unused tokio-macros during the successful build."
+  },
+  "acceptance": {
+    "performed_on": "2026-10-28",
+    "text_auto_paste_into_notepad": true,
+    "send_input_events": "4/4",
+    "wechat_chat_bubble_capture": true,
+    "wechat_original_viewer_capture": true,
+    "official_image_preview_rendered": true,
+    "image_dimensions": [
+      2048,
+      2048
+    ],
+    "history_image_writeback_exact_rgba_match": true,
+    "png_dib_dibv5_available": true,
+    "excel_whole_column_copy_observation": {
+      "synthetic_workbook": true,
+      "copy_call_ms": 78,
+      "sample_seconds": 8,
+      "plain_text_capture": true,
+      "vector_fallback_observed": false
+    }
+  },
+  "preservation": {
+    "missing_original_history": 0,
+    "changed_original_content_or_metadata": 0,
+    "settings_unchanged": true,
+    "new_records": 18
+  },
+  "limits": [
+    "Acceptance is bounded to the recorded Windows flows; it is not long-term stability proof.",
+    "Runtime logs rotated; checked snapshots do not form a complete session archive.",
+    "One AccessBusy win32=5 watcher event was observed while EcoPaste owned the clipboard; actual image writeback pixel comparison passed.",
+    "Historical overall USER_ACCEPTED flag remains false; the user separately requested saving this version as the baseline on 2026-10-29."
+  ],
+  "privacy": "No clipboard bodies, image pixels, screenshots, database, user settings, raw logs, or machine paths are included."
+}

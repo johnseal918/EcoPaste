@@ -1,0 +1,396 @@
+//! 剪贴板读取：基于 [`clipboard_rs`] 的薄封装，产出带类型标记的 [`ClipboardPayload`]。
+//!
+//! [`clipboard_rs`] 已内置 macOS（`NSPasteboard`）/ Windows 的平台读取，
+//! 这里只负责按用户设置的优先级归类，并过滤掉空内容。
+//!
+//! 图片读取走「PNG 直通优先」：源本身是 PNG 时直取原始字节、从头部解析尺寸（零解码/编码）；
+//! 仅当源是 TIFF/DIB 等非 PNG 时才回退到库的解码 + 重编码 PNG。
+
+use clipboard_rs::common::RustImage;
+use clipboard_rs::{Clipboard, ClipboardContext, ContentFormat};
+#[cfg(target_os = "windows")]
+use winapi::um::winuser::{IsClipboardFormatAvailable, RegisterClipboardFormatW};
+#[cfg(target_os = "windows")]
+use clipboard_win::{raw as clipboard_raw, Clipboard as WindowsClipboard};
+#[cfg(target_os = "windows")]
+use std::time::Instant;
+
+use super::payload::{ClipboardPayload, ImagePayload, TextPayload};
+#[cfg(target_os = "windows")]
+use super::emf;
+#[cfg(target_os = "windows")]
+use super::source;
+use crate::core::{AppError, Result};
+use crate::settings::{Capture, CaptureKind};
+
+/// 持有一个 [`ClipboardContext`] 的读取器。轻量，可按需创建；
+/// 监听线程（2.2）会持有一个长生命周期实例复用。
+pub struct ClipboardReader {
+    ctx: ClipboardContext,
+}
+
+impl ClipboardReader {
+    pub fn new() -> Result<Self> {
+        let ctx = ClipboardContext::new().map_err(clip_err)?;
+        Ok(Self { ctx })
+    }
+
+    /// 读取当前剪贴板，按用户配置的内容类型顺序归类为单一载荷。
+    ///
+    /// 同一次复制可能同时存在文件、图片、HTML、RTF、纯文本表示；这里只返回第一个启用且可读取的类型。
+    pub fn read_with_capture(&self, capture: &Capture) -> Result<Option<ClipboardPayload>> {
+        #[cfg(target_os = "windows")]
+        let _access = match super::WINDOWS_ACCESS.try_lock() {
+            Ok(access) => access,
+            Err(std::sync::TryLockError::Poisoned(err)) => err.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(AppError::Clipboard(
+                    "Windows clipboard text snapshot busy: EcoPaste write in progress".to_owned(),
+                ));
+            }
+        };
+        // During Excel copy the delayed bitmap can precede BIFF publication.
+        // Prefer available Unicode text without triggering the delayed picture
+        // even when the BIFF metadata is temporarily absent. Picture-only copies
+        // without Unicode text continue through the normal image branch.
+        #[cfg(target_os = "windows")]
+        if source::clipboard_owner_is_excel() {
+            let has_cells = is_excel_cell_clipboard();
+            let has_text = self.ctx.has(ContentFormat::Text);
+            if capture.text && has_text {
+                log::info!(
+                    "clipboard excel selected=plain_text biff_available={has_cells} owner_pid={:?}",
+                    source::clipboard_owner_pid()
+                );
+                return self
+                    .read_excel_plain_text()
+                    .map(|text| text.map(ClipboardPayload::Text));
+            }
+            if has_cells && capture.text {
+                // Cell text is not yet offered; do not request the large image.
+                return Ok(None);
+            }
+            // Explicit Excel Copy as Picture (Picture, not Bitmap) can provide
+            // only WMF/EMF. Never request it when cell or text formats exist:
+            // ordinary column/whole-sheet copies may advertise delayed EMF.
+            if capture.image && !has_text && !has_cells && emf::is_advertised() {
+                log::info!("clipboard excel image=vector_metafile selected=emf_fallback");
+                return emf::capture_png().map(|image| image.map(ClipboardPayload::Image));
+            }
+        }
+
+        // WeChat publishes an image together with its temporary file drop.
+        // Preserve the copied picture instead of recording only that file path.
+        #[cfg(target_os = "windows")]
+        if capture.image && self.ctx.has(ContentFormat::Image) && source::clipboard_owner_is_wechat() {
+            return self.read_image().map(|image| image.map(ClipboardPayload::Image));
+        }
+
+        let mut text_payload: Option<Option<TextPayload>> = None;
+
+        for kind in capture.ordered_kinds() {
+            if !capture.is_enabled(kind) {
+                continue;
+            }
+
+            match kind {
+                CaptureKind::Files => {
+                    if let Some(files) = self.read_files()? {
+                        return Ok(Some(ClipboardPayload::Files(files)));
+                    }
+                }
+                CaptureKind::Image => {
+                    if self.ctx.has(ContentFormat::Image) {
+                        if let Some(image) = self.read_image()? {
+                            return Ok(Some(ClipboardPayload::Image(image)));
+                        }
+                    }
+                }
+                CaptureKind::Html | CaptureKind::Rtf | CaptureKind::Text => {
+                    if text_payload.is_none() {
+                        text_payload = Some(self.read_text_payload(capture)?);
+                    }
+
+                    let Some(text) = text_payload.as_ref().and_then(|payload| payload.as_ref())
+                    else {
+                        continue;
+                    };
+
+                    if text_contains_kind(text, kind) {
+                        return Ok(Some(ClipboardPayload::Text(text.clone())));
+                    }
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// 读取剪贴板文件路径列表；空列表视为无可用文件内容。
+    fn read_files(&self) -> Result<Option<Vec<String>>> {
+        if !self.ctx.has(ContentFormat::Files) {
+            return Ok(None);
+        }
+
+        let files: Vec<String> = self
+            .ctx
+            .get_files()
+            .map_err(clip_err)?
+            .into_iter()
+            .filter(|path| !path.is_empty())
+            .collect();
+        if files.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(files))
+    }
+
+    /// Windows Excel 单元格仅读取原始 Unicode 字节，并在释放剪贴板后转码。
+    /// 这条路径不调用 clipboard-rs::get，避免持锁期间再次 OpenClipboard。
+    /// GetClipboardData 本身仍可能触发来源程序不可中断的延迟渲染。
+    #[cfg(target_os = "windows")]
+    fn read_excel_plain_text(&self) -> Result<Option<TextPayload>> {
+        let sequence_before = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
+        let started = Instant::now();
+        log::info!(
+            "clipboard excel unicode_read=start sequence={sequence_before} owner_pid={:?}",
+            source::clipboard_owner_pid()
+        );
+        let mut raw = Vec::new();
+        let locked_for = {
+            // A single open attempt. The watcher handles bounded retries
+            // instead of retrying while Excel is still publishing formats.
+            let _clip = WindowsClipboard::new().map_err(|err| {
+                AppError::Clipboard(format!("Windows clipboard text snapshot busy: {err}"))
+            })?;
+            let opened = Instant::now();
+            clipboard_raw::get_vec(clipboard_win::formats::CF_UNICODETEXT, &mut raw)
+                .map_err(|err| {
+                    AppError::Clipboard(format!("Excel Unicode clipboard read failed: {err}"))
+                })?;
+            opened.elapsed()
+        }; // CloseClipboard before decoding or logging.
+        let sequence_after = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
+        log::info!(
+            "clipboard excel unicode_read=closed seq_before={sequence_before} seq_after={sequence_after} lock_ms={} total_ms={} bytes={}",
+            locked_for.as_millis(),
+            started.elapsed().as_millis(),
+            raw.len()
+        );
+        if sequence_before != 0 && sequence_after != 0 && sequence_before != sequence_after {
+            return Err(AppError::Clipboard(
+                "Excel clipboard sequence changed during Unicode snapshot".to_owned(),
+            ));
+        }
+        if raw.len() % 2 != 0 {
+            return Err(AppError::Clipboard(
+                "Excel Unicode clipboard has an odd byte length".to_owned(),
+            ));
+        }
+        let mut utf16 = Vec::with_capacity(raw.len() / 2);
+        for chunk in raw.chunks_exact(2) {
+            let unit = u16::from_le_bytes([chunk[0], chunk[1]]);
+            if unit == 0 {
+                break;
+            }
+            utf16.push(unit);
+        }
+        if utf16.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(TextPayload {
+            text: String::from_utf16_lossy(&utf16),
+            html: None,
+            rtf: None,
+        }))
+    }
+
+    /// 读取剪贴板中的文本族表示，包含纯文本、HTML 和 RTF。
+    ///
+    /// Open once and use raw getters; clipboard-rs::get nests OpenClipboard,
+    /// ignores acquisition/read errors and can turn a failed read into Ok([]).
+    #[cfg(target_os = "windows")]
+    fn read_text_payload(&self, capture: &Capture) -> Result<Option<TextPayload>> {
+        use clipboard_win::{formats, get};
+        let _clipboard_lock = clipboard_win::Clipboard::new_attempts(10).map_err(|err| {
+            AppError::Clipboard(format!("Windows clipboard text snapshot busy: {err}"))
+        })?;
+        let mut text = String::new();
+        let mut html = None;
+        let mut rtf = None;
+        if clipboard_win::is_format_avail(formats::CF_UNICODETEXT) {
+            text = get(formats::Unicode).map_err(clip_err)?;
+        }
+        if capture.html {
+            let format = formats::Html::new().ok_or_else(|| {
+                AppError::Clipboard("register Windows HTML format failed".to_owned())
+            })?;
+            if clipboard_win::is_format_avail(format.code()) {
+                match get::<String, _>(format) {
+                    Ok(value) => html = non_empty_string(value),
+                    Err(err) if !text.is_empty() => log::warn!("read optional clipboard HTML failed: {err}"),
+                    Err(err) => return Err(clip_err(err)),
+                }
+            }
+        }
+        if capture.rtf {
+            let format = clipboard_win::register_format("Rich Text Format").ok_or_else(|| {
+                AppError::Clipboard("register Windows RTF format failed".to_owned())
+            })?;
+            if clipboard_win::is_format_avail(format.get()) {
+                match get::<Vec<u8>, _>(formats::RawData(format.get())) {
+                    Ok(bytes) => rtf = non_empty_string(String::from_utf8_lossy(&bytes).trim_end_matches('\0').to_owned()),
+                    Err(err) if !text.is_empty() || html.is_some() => log::warn!("read optional clipboard RTF failed: {err}"),
+                    Err(err) => return Err(clip_err(err)),
+                }
+            }
+        }
+
+        if text.is_empty() && html.is_none() && rtf.is_none() {
+            return Ok(None);
+        }
+
+        Ok(Some(TextPayload { text, html, rtf }))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn read_text_payload(&self, capture: &Capture) -> Result<Option<TextPayload>> {
+        let has_text = self.ctx.has(ContentFormat::Text);
+        let has_html = capture.html && self.ctx.has(ContentFormat::Html);
+        let has_rtf = capture.rtf && self.ctx.has(ContentFormat::Rtf);
+        if !has_text && !has_html && !has_rtf {
+            return Ok(None);
+        }
+
+        let text = if has_text {
+            self.ctx.get_text().map_err(clip_err)?
+        } else {
+            String::new()
+        };
+        let html = read_optional(has_html, || self.ctx.get_html());
+        let rtf = read_optional(has_rtf, || self.ctx.get_rich_text());
+
+        if text.is_empty() && html.is_none() && rtf.is_none() {
+            return Ok(None);
+        }
+
+        Ok(Some(TextPayload { text, html, rtf }))
+    }
+
+    /// 读取图片为 PNG 载荷。
+    ///
+    /// 快路径：剪贴板原生就带 PNG（浏览器复制图片等）时，直接取原始 PNG 字节，
+    /// 宽高从 PNG 头（IHDR）解析——全程零图像解码/编码。
+    ///
+    /// 慢路径回退：源是 TIFF（macOS 截图/多数 App）/ DIB（Windows）等非 PNG 时，
+    /// 交给 [`clipboard_rs`] 解码再编码为 PNG（存储格式恒为 PNG，这次转码无法避免）。
+    fn read_image(&self) -> Result<Option<ImagePayload>> {
+        if let Ok(bytes) = self.ctx.get_buffer(PNG_FORMAT) {
+            if let Some((width, height)) = png_dimensions(&bytes) {
+                return Ok(Some(ImagePayload {
+                    bytes,
+                    width,
+                    height,
+                }));
+            }
+            // 拿到了 PNG 格式字节但解析不出尺寸（异常/截断）：落到下方回退，由库重新解码。
+        }
+
+        let image = self.ctx.get_image().map_err(clip_err)?;
+        let (width, height) = image.get_size();
+        if width == 0 || height == 0 {
+            return Ok(None);
+        }
+
+        let bytes = image.to_png().map_err(clip_err)?.get_bytes().to_vec();
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(ImagePayload {
+            bytes,
+            width,
+            height,
+        }))
+    }
+}
+
+/// 仅检查已公布的 Excel 单元格格式，不发出数据读取请求。
+/// BIFF 用于区分未就绪的单元格；实际 Excel owner 的 Unicode 优先路径不以其为门槛。
+#[cfg(target_os = "windows")]
+fn is_excel_cell_clipboard() -> bool {
+    ["Biff8", "Biff12", "Biff5", "XML Spreadsheet"]
+        .iter()
+        .any(|name| {
+            let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+            let format = unsafe { RegisterClipboardFormatW(wide.as_ptr()) };
+            format != 0 && unsafe { IsClipboardFormatAvailable(format) != 0 }
+        })
+}
+
+/// 平台剪贴板里 PNG 的原始格式标识符，用于 `get_buffer` 直取原始字节。
+#[cfg(target_os = "macos")]
+const PNG_FORMAT: &str = "public.png";
+#[cfg(target_os = "windows")]
+const PNG_FORMAT: &str = "PNG";
+
+/// 从 PNG 字节解析宽高（不解码像素）。
+///
+/// PNG 布局固定：8 字节签名 + 4 字节 IHDR 长度 + 4 字节 "IHDR" + 宽(大端 u32) + 高(大端 u32)。
+/// 宽高位于偏移 16..24。校验签名与 IHDR 标记，任一不符返回 `None`（交回退路径处理）。
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    if bytes.len() < 24 || bytes[..8] != SIGNATURE || &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some((width, height))
+}
+
+/// 仅当 `available` 时读取，读取失败或空串都归并为 `None`，
+/// 让「格式存在但内容为空」与「格式不存在」对下游表现一致。
+#[cfg(target_os = "windows")]
+fn non_empty_string(value: String) -> Option<String> {
+    (!value.is_empty()).then_some(value)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn read_optional(
+    available: bool,
+    read: impl FnOnce() -> clipboard_rs::common::Result<String>,
+) -> Option<String> {
+    if !available {
+        return None;
+    }
+    read().ok().filter(|value| !value.is_empty())
+}
+
+/// 判断文本载荷中是否实际带有指定文本族表示。
+fn text_contains_kind(text: &TextPayload, kind: CaptureKind) -> bool {
+    let has_plain = !text.text.trim().is_empty();
+
+    match kind {
+        CaptureKind::Text => has_plain,
+        CaptureKind::Html => {
+            has_plain
+                && text
+                    .html
+                    .as_ref()
+                    .is_some_and(|html| !html.trim().is_empty())
+        }
+        CaptureKind::Rtf => {
+            has_plain && text.rtf.as_ref().is_some_and(|rtf| !rtf.trim().is_empty())
+        }
+        CaptureKind::Files | CaptureKind::Image => false,
+    }
+}
+
+fn clip_err<E: std::fmt::Display>(err: E) -> AppError {
+    AppError::Clipboard(err.to_string())
+}
+

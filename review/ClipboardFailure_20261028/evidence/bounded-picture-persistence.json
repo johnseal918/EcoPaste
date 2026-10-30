@@ -1,0 +1,22 @@
+{
+  "scope": "one WeChat original-image viewer copy; database persistence only; no universal capture or UI acceptance claim",
+  "records": [
+    {
+      "kind": "image",
+      "width": 2048,
+      "height": 2048,
+      "bytes": 8390392,
+      "updated_at_utc": "2026-10-28T08:18:46.092693+00:00",
+      "source_app": "Weixin"
+    },
+    {
+      "kind": "files",
+      "width": null,
+      "height": null,
+      "bytes": null,
+      "updated_at_utc": "2026-10-28T08:18:45.890905800+00:00",
+      "source_app": "Weixin"
+    }
+  ],
+  "actual_images_and_history_ids_excluded": true
+}

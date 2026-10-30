@@ -1,0 +1,9 @@
+   Compiling EcoPaste v1.1.0 (<PROJECT_ROOT>\src-tauri)
+    Finished `release` profile [optimized] target(s) in 25.75s
+     Running unittests src\lib.rs (src-tauri\target\x86_64-pc-windows-msvc\release\deps\eco_paste_lib-9268684781b8f7ff.exe)
+
+running 1 test
+test clipboard::windows_access_regression::active_transaction_survives_competing_capture_and_write ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+

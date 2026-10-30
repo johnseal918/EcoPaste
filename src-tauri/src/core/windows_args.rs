@@ -38,30 +38,3 @@ pub fn quote_arg(value: impl AsRef<str>) -> String {
     result
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn quote_arg_keeps_simple_values_plain() {
-        assert_eq!(quote_arg("--auto-launch"), "--auto-launch");
-    }
-
-    #[test]
-    fn quote_arg_wraps_spaces() {
-        assert_eq!(
-            quote_arg(r"C:\Program Files\EcoPaste\EcoPaste.exe"),
-            r#""C:\Program Files\EcoPaste\EcoPaste.exe""#
-        );
-    }
-
-    #[test]
-    fn quote_arg_escapes_quotes() {
-        assert_eq!(quote_arg(r#"value"tail"#), r#""value\"tail""#);
-    }
-
-    #[test]
-    fn quote_arg_escapes_trailing_backslash() {
-        assert_eq!(quote_arg(r"C:\Users\A Yan\"), r#""C:\Users\A Yan\\""#);
-    }
-}

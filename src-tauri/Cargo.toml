@@ -69,8 +69,10 @@ plist = { version = "1", default-features = false }
 tauri-plugin-macos-permissions = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+clipboard-win = "5.4.1"
 winapi = { version = "0.3", features = [
     "winuser",
+    "wingdi",
     "processthreadsapi",
     "handleapi",
     "winbase",
@@ -93,5 +95,3 @@ windows = { version = "0.52", features = [
     "Win32_UI_Shell",
 ] }
 
-[dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }

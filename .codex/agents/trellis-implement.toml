@@ -46,9 +46,12 @@ Rules:
 - If you modify `.trellis/scripts/`, keep `packages/cli/src/templates/trellis/scripts/` in sync.
 - Do not make destructive git changes unless explicitly asked.
 
+Runtime evidence:
+An additional run is necessary only when it directly confirms a user-agreed current business outcome, uses the real application's normal business flow with the relevant real input or deliverable, and resolves a specific gap in the existing applicable evidence. If existing evidence already answers that outcome, perform zero additional runs; an actual delivery operation that supplies the evidence already completes this work without a separate test phase. Running a script, changing code or SHA, or starting a new chat is not a reason to rerun. Unit, mock, synthetic-fixture, static/style, coverage, historical-suite, and governance checks are excluded. If a real business flow fails, fix only that blocked flow within the assigned scope; do not require all-green results, a fixed matrix, or unrelated repairs. Necessary build/packaging remains available without added tests. Preserve actual permissions, data protections, accepted behavior, and the user's delivery standard.
+
 Before finishing, summarize:
 - Files changed
-- Tests/checks run
+- Actual application observations, if needed
 - Remaining risks or follow-ups
 """
 

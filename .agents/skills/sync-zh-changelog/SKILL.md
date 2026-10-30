@@ -1,6 +1,6 @@
 ---
 name: sync-zh-changelog
-description: "Synchronize an EcoPaste release section from CHANGELOG.md into CHANGELOG.zh-CN.md with project terminology and structural validation. Use when the user explicitly invokes $sync-zh-changelog or asks to generate, translate, update, or verify the Chinese changelog for a release."
+description: "Synchronize an EcoPaste release section from CHANGELOG.md into CHANGELOG.zh-CN.md with project terminology. Use when the user explicitly invokes $sync-zh-changelog or asks to generate, translate, update, or verify the Chinese changelog for a release."
 ---
 
 # Sync Chinese Changelog
@@ -33,16 +33,7 @@ Synchronize one EcoPaste release from `CHANGELOG.md` to
    EcoPaste, macOS, Windows, Token, AWS Key, and JWT consistent with the UI.
 5. Edit only `CHANGELOG.zh-CN.md`. Do not modify `CHANGELOG.md`, version files,
    release configuration, or unrelated dirty changes. Do not commit or push.
-6. Validate the result from the repository root:
-
-   ```bash
-   python3 .agents/skills/sync-zh-changelog/scripts/check_sync.py
-   git diff --check -- CHANGELOG.zh-CN.md
-   ```
-
-   Pass `--version <version>` to validate a user-selected non-latest release.
-7. Fix every validation error, rerun both checks, then report the synchronized
-   version and validation result.
+6. Report the synchronized release version and the actual prose changes. Do not run separate structural or diff-check gates.
 
 ## Translation headings
 

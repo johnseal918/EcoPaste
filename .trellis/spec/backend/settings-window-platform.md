@@ -68,13 +68,6 @@ and applies the transient `clipboardViewState` side effect on `window://visibili
   user's last filters.
 - Bad: storing a raw group UUID without the `group:` prefix is rejected.
 
-#### 6. Tests Required
-
-- Missing-field defaults assert all three fields default to `preserve`.
-- Settings validation rejects invalid `select_group_on_open` strings.
-- Frontend type-check covers the mirrored selection unions and the dynamic group
-  Select value shape.
-
 #### 7. Wrong vs Correct
 
 Wrong:
@@ -169,16 +162,6 @@ and preview payloads. Treat it as a cross-layer contract change.
   all target `CLIPBOARD_WINDOW_LABEL` / `WINDOW_LABEL.CLIPBOARD`.
 - Base: secondary windows still use their existing labels and lifecycle rules.
 - Bad: component code checks `event.payload.label === "main"` directly.
-
-#### 6. Tests Required
-
-- `rg` verifies no stale `MAIN_WINDOW_LABEL`, `WINDOW_LABEL.MAIN`, raw
-  `"main"` label, or old command names remain outside platform terminology.
-- Frontend: `pnpm lint` and `pnpm tsc`.
-- Backend: `cargo fmt`, `cargo clippy -- -D warnings`, and `cargo test`.
-- Manual desktop checks for clipboard show/hide/toggle, pin, auto-hide,
-  preview, tray click, context menu dispatch, onboarding completion, and
-  shortcuts.
 
 #### 7. Wrong vs Correct
 
@@ -312,15 +295,6 @@ Tauri command registration, and the React keyboard abstraction.
   Tab, Enter, or selected Ctrl shortcuts before the input can handle them.
 - Bad: applying `data-allow-global-keyboard` to note or group-name editors makes
   editing keys leave the field unexpectedly.
-
-#### 6. Tests Required
-
-- Backend: `cargo clippy -- -D warnings` covers the Windows command and cfg
-  branches; `cargo test` must still pass.
-- Frontend: `pnpm tsc` and `pnpm lint` cover command mirrors and hook typing.
-- Manual Windows checks: open without focus steal, type in search, type/edit a
-  note, type/edit a group name, blur each field, verify the prior app receives
-  focus, and verify list navigation still works after blur.
 
 #### 7. Wrong vs Correct
 
@@ -465,20 +439,6 @@ task. Keep this Rust-owned; React only toggles `general.autoStart`.
 - Bad: disabling autostart reports success while an inaccessible HKLM Run value
   remains active.
 
-### 6. Tests Required
-
-- Backend: `cargo check`, `cargo clippy -- -D warnings`, and `cargo test`.
-- Unit tests: `is_autostart_launch` returns true when `--auto-launch` is present
-  and false for a regular executable-only argument list.
-- Windows validation: enable autostart as normal user and elevated user, inspect
-  Autoruns for a single EcoPaste Run entry, then disable and verify no Run entry
-  remains.
-- Upgrade validation: seed both HKCU and HKLM `...\Run\EcoPaste` values, launch
-  EcoPaste once, and verify duplicate cleanup or single-entry fallback.
-- Administrator validation: with `general.runAsAdmin=true`, confirm
-  `EcoPasteAdmin` remains a relaunch helper and does not combine with duplicate
-  Run entries to start multiple processes at login.
-
 ### 7. Wrong vs Correct
 
 Wrong:
@@ -586,18 +546,6 @@ not a frontend-only permission prompt.
   the scheduled task aligned with the current executable.
 - Bad: frontend marks administrator permission granted because `runAsAdmin=true`
   even though `runningAsAdmin=false`.
-
-### 6. Tests Required
-
-- Backend: unit-test Windows command-line quoting for scheduled task / UAC
-  arguments.
-- Backend: `cargo clippy -- -D warnings` must pass on Windows-specific code.
-- Backend: `cargo test` must include settings default coverage for
-  `general.run_as_admin`.
-- Frontend: `pnpm tsc` must cover `AdminLaunchStatus` and the mirrored
-  `runAsAdmin` setting.
-- Manual Windows validation is required for UAC approval/cancel and scheduled
-  task launch behavior.
 
 ### 7. Wrong vs Correct
 
@@ -709,26 +657,6 @@ not a frontend-only preference action.
   auto-check frequency locally.
 - Bad: Rust assumes `Update::install` or `Update::download_and_install`
   automatically relaunches the application on macOS.
-
-### 6. Tests Required
-
-- Backend checks: `cargo clippy -- -D warnings` and `cargo test`.
-- Auto-check scheduling changes must verify that the background task loops after
-  the first check and still delegates frequency/auto-check gating to
-  `should_auto_check`.
-- Frontend checks: `pnpm tsc` and `pnpm lint`.
-- Packaging/build check: `pnpm build` for route and locale integration.
-- Manual signed-artifact check must assert that a successful install terminates
-  the old process, relaunches EcoPaste, and reports the new version after
-  startup.
-- Manual update-server checks when release artifacts exist:
-  - mock endpoint returns newer signed version -> update found and install path
-    starts.
-  - mock endpoint returns bad signature -> download refuses install.
-  - `includeBeta=false` -> stable endpoint only.
-  - `includeBeta=true` -> beta endpoint is attempted before stable fallback.
-  - `includeNightly=true` -> nightly endpoint is attempted before beta and
-    stable fallback.
 
 ### 7. Wrong vs Correct
 
