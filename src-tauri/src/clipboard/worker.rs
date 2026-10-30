@@ -25,6 +25,13 @@ const MAX_FRAME_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_BACKGROUND_CAPTURE: Duration = Duration::from_secs(8);
 const RESPONSE_POLL: Duration = Duration::from_millis(10);
 
+/// An unsuccessful native read is a valid protocol reply. Only framing/pipe
+/// failure terminates the response reader and invalidates the process.
+enum WorkerReply {
+    Captured(Option<ClipboardPayload>),
+    ReadFailed(String),
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Request {
     capture: Capture,
@@ -65,31 +72,42 @@ fn write_reply(out: &mut impl Write, result: Result<Option<ClipboardPayload>>) -
     out.flush()
 }
 
-fn read_reply(input: &mut impl Read) -> std::result::Result<Option<ClipboardPayload>, String> {
+fn read_reply(input: &mut impl Read) -> io::Result<WorkerReply> {
     let mut header = [0u8; 17];
-    input.read_exact(&mut header).map_err(|err| err.to_string())?;
+    input.read_exact(&mut header)?;
     let kind = header[0];
     let width = u32::from_le_bytes(header[1..5].try_into().unwrap());
     let height = u32::from_le_bytes(header[5..9].try_into().unwrap());
     let size = u64::from_le_bytes(header[9..17].try_into().unwrap());
     if size > MAX_FRAME_BYTES {
-        return Err("clipboard worker response exceeded capacity".to_owned());
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "clipboard worker response exceeded capacity",
+        ));
     }
     let mut bytes = vec![0u8; size as usize];
-    input.read_exact(&mut bytes).map_err(|err| err.to_string())?;
+    input.read_exact(&mut bytes)?;
+    let decode = |error: serde_json::Error| io::Error::new(io::ErrorKind::InvalidData, error);
     match kind {
-        0 => Ok(None),
+        0 if size == 0 => Ok(WorkerReply::Captured(None)),
         1 => serde_json::from_slice::<TextPayload>(&bytes)
-            .map(ClipboardPayload::Text)
-            .map(Some)
-            .map_err(|err| err.to_string()),
-        2 => Ok(Some(ClipboardPayload::Image(ImagePayload { bytes, width, height }))),
+            .map(|value| WorkerReply::Captured(Some(ClipboardPayload::Text(value))))
+            .map_err(decode),
+        2 if width != 0 && height != 0 => {
+            Ok(WorkerReply::Captured(Some(ClipboardPayload::Image(
+                ImagePayload { bytes, width, height },
+            ))))
+        }
         3 => serde_json::from_slice::<Vec<String>>(&bytes)
-            .map(ClipboardPayload::Files)
-            .map(Some)
-            .map_err(|err| err.to_string()),
-        4 => Err(String::from_utf8_lossy(&bytes).into_owned()),
-        _ => Err("clipboard worker returned unknown payload kind".to_owned()),
+            .map(|value| WorkerReply::Captured(Some(ClipboardPayload::Files(value))))
+            .map_err(decode),
+        4 => Ok(WorkerReply::ReadFailed(
+            String::from_utf8_lossy(&bytes).into_owned(),
+        )),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "clipboard worker returned invalid frame",
+        )),
     }
 }
 
@@ -162,7 +180,7 @@ pub fn run_if_requested() -> bool {
 struct WorkerProcess {
     child: Child,
     stdin: ChildStdin,
-    replies: Receiver<std::result::Result<Option<ClipboardPayload>, String>>,
+    replies: Receiver<io::Result<WorkerReply>>,
     reply_reader: Option<JoinHandle<()>>,
     diagnostic_reader: Option<JoinHandle<()>>,
 }
@@ -188,9 +206,11 @@ impl WorkerProcess {
         let reply_reader = std::thread::Builder::new()
             .name("clipboard-worker-pipe".to_owned())
             .spawn(move || loop {
+                // A read failure is a valid WorkerReply::ReadFailed, so keep
+                // this pipe reader alive. Only an actual transport error ends it.
                 let response = read_reply(&mut stdout);
-                let closed = response.is_err();
-                if tx.send(response).is_err() || closed {
+                let failed_transport = response.is_err();
+                if tx.send(response).is_err() || failed_transport {
                     break;
                 }
             })
@@ -233,34 +253,109 @@ impl WorkerProcess {
     }
 }
 
-impl Drop for WorkerProcess {
-    fn drop(&mut self) {
-        // Only the EcoPaste-owned worker is terminated. Win32 releases a
-        // terminated process's open clipboard; never kill a source app.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        if let Some(handle) = self.reply_reader.take() {
-            let _ = handle.join();
+impl WorkerProcess {
+    /// Request termination of only this verified child PID. TerminateProcess
+    /// is asynchronous: never wait()/join() on the foreground capture path.
+    fn request_stop(&mut self) {
+        match self.child.kill() {
+            Ok(()) => log::info!("clipboard helper stop requested pid={}", self.child.id()),
+            Err(err) => log::warn!(
+                "clipboard helper stop request failed pid={} error={err}",
+                self.child.id()
+            ),
         }
-        if let Some(handle) = self.diagnostic_reader.take() {
-            let _ = handle.join();
+    }
+
+    fn poll_exit(&mut self) -> bool {
+        match self.child.try_wait() {
+            Ok(Some(status)) => {
+                log::info!(
+                    "clipboard helper exited pid={} status={status}",
+                    self.child.id()
+                );
+                true
+            }
+            Ok(None) => false,
+            Err(err) => {
+                log::warn!(
+                    "clipboard helper exit check failed pid={} error={err}",
+                    self.child.id()
+                );
+                false
+            }
         }
     }
 }
 
-/// Persistent for ordinary rapid copies; recreated after timeout, crash or
-/// foreground preemption. The only watcher remains in the main process.
+impl Drop for WorkerProcess {
+    fn drop(&mut self) {
+        // Drop may run on the Tauri request thread. Never block it with
+        // wait()/join(); close the child handles and detach the pipe readers.
+        // Normal and abnormal process exits are handled by try_wait in the
+        // session; a final nonblocking stop request protects normal shutdown.
+        if !self.poll_exit() {
+            self.request_stop();
+        }
+        self.reply_reader.take();
+        self.diagnostic_reader.take();
+    }
+}
+
+/// A child which failed to exit is quarantined rather than replaced by more
+/// helpers. At most one owned process can be active or waiting for retirement.
 #[derive(Default)]
 pub struct WorkerSession {
     process: Option<WorkerProcess>,
+    retiring: Option<WorkerProcess>,
+    blocked_sequence: Option<u32>,
 }
 
 impl WorkerSession {
+    /// Termination is requested once and observed with try_wait on subsequent
+    /// watcher iterations. Nothing waits for another process on this thread.
+    fn retire_current(&mut self, sequence: u32, reason: &'static str) {
+        self.blocked_sequence = Some(sequence);
+        if let Some(mut worker) = self.process.take() {
+            log::warn!(
+                "clipboard helper retiring pid={} sequence={sequence} reason={reason}",
+                worker.child.id()
+            );
+            worker.request_stop();
+            self.retiring = Some(worker);
+        }
+    }
+
+    fn retirement_finished(&mut self) -> bool {
+        let Some(worker) = self.retiring.as_mut() else {
+            return true;
+        };
+        if !worker.poll_exit() {
+            return false;
+        }
+        // Releasing pipe handles and JoinHandle references cannot block here.
+        self.retiring.take();
+        true
+    }
+
     pub fn capture(&mut self, capture: &Capture, age: Duration) -> Result<Option<ClipboardPayload>> {
+        let sequence = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
         if super::windows_write_pending() {
             return Err(AppError::Clipboard(
                 "clipboard worker yields to foreground write".to_owned(),
             ));
+        }
+        if !self.retirement_finished() {
+            return Err(AppError::Clipboard(
+                "clipboard helper retirement still pending; no new worker started".to_owned(),
+            ));
+        }
+        if self.blocked_sequence == Some(sequence) {
+            return Err(AppError::Clipboard(
+                "clipboard helper transport for this sequence is quarantined".to_owned(),
+            ));
+        }
+        if self.blocked_sequence.is_some() {
+            self.blocked_sequence = None;
         }
         if self.process.is_none() {
             self.process = Some(WorkerProcess::spawn()?);
@@ -268,12 +363,10 @@ impl WorkerSession {
         let request = Request {
             capture: capture.clone(),
             age_ms: age.as_millis().min(u64::MAX as u128) as u64,
-            expected_sequence: unsafe {
-                winapi::um::winuser::GetClipboardSequenceNumber()
-            },
+            expected_sequence: sequence,
         };
         if let Err(err) = self.process.as_mut().unwrap().submit(&request) {
-            self.process = None;
+            self.retire_current(sequence, "request_pipe_failed");
             return Err(err);
         }
         let started = Instant::now();
@@ -283,7 +376,7 @@ impl WorkerSession {
                     "clipboard worker preempted for foreground paste after_ms={}",
                     started.elapsed().as_millis()
                 );
-                self.process = None;
+                self.retire_current(sequence, "foreground_write");
                 return Err(AppError::Clipboard(
                     "clipboard worker canceled for foreground write".to_owned(),
                 ));
@@ -293,26 +386,26 @@ impl WorkerSession {
                     "clipboard worker native call timed out after_ms={}",
                     started.elapsed().as_millis()
                 );
-                self.process = None;
+                self.retire_current(sequence, "background_timeout");
                 return Err(AppError::Clipboard(
-                    "clipboard worker capture timed out and was retired".to_owned(),
+                    "clipboard worker capture timed out and retirement requested".to_owned(),
                 ));
             }
             match self.process.as_ref().unwrap().replies.recv_timeout(RESPONSE_POLL) {
-                Ok(Ok(payload)) => return Ok(payload),
-                Ok(Err(error)) => {
-                    // Native errors may be transient, but a dead pipe must
-                    // always get a clean worker on the next clipboard event.
-                    if self.process.as_mut().is_some_and(|p| {
-                        p.child.try_wait().ok().flatten().is_some()
-                    }) {
-                        self.process = None;
-                    }
+                Ok(Ok(WorkerReply::Captured(payload))) => return Ok(payload),
+                Ok(Ok(WorkerReply::ReadFailed(error))) => {
+                    // A normal OS/business failure does not destroy the pipe.
                     return Err(AppError::Clipboard(error));
+                }
+                Ok(Err(error)) => {
+                    self.retire_current(sequence, "response_protocol_failed");
+                    return Err(AppError::Clipboard(format!(
+                        "clipboard helper response protocol failed: {error}"
+                    )));
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
-                    self.process = None;
+                    self.retire_current(sequence, "response_channel_closed");
                     return Err(AppError::Clipboard(
                         "clipboard helper disconnected during capture".to_owned(),
                     ));
