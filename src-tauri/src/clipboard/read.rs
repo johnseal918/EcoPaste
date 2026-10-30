@@ -424,9 +424,16 @@ impl ClipboardReader {
                     Some(AppError::Clipboard("Windows PNG header invalid".to_owned()))
                 }
                 Ok(None) => None,
+                Err(error) if is_clipboard_access_blocked(&error) => {
+                    // If OpenClipboard itself is unavailable (win32=5/1460),
+                    // another PNG/DIB request cannot fix the contention and
+                    // would unnecessarily amplify delayed rendering.
+                    return Err(error);
+                }
                 Err(error) => {
-                    // A temporarily unreadable PNG must not hide a valid DIB.
-                    log::info!("clipboard PNG unreadable; checking DIB fallback");
+                    // Malformed/unavailable PNG is distinct from a busy native
+                    // clipboard; an already-advertised DIB can still be valid.
+                    log::info!("clipboard PNG format unavailable; trying DIB fallback");
                     Some(error)
                 }
             };
@@ -501,9 +508,13 @@ impl ClipboardReader {
                 }
                 Ok(_) => {}
                 Err(err) => {
-                    last_error = Some(AppError::Clipboard(format!(
+                    let failure = AppError::Clipboard(format!(
                         "Windows PNG clipboard data temporarily unavailable: {err}"
-                    )));
+                    ));
+                    if is_clipboard_access_blocked(&failure) {
+                        return Err(failure);
+                    }
+                    last_error = Some(failure);
                 }
             }
         }
@@ -539,9 +550,13 @@ impl ClipboardReader {
                 Ok(_) if !data.is_empty() => return Ok(Some(data)),
                 Ok(_) => {}
                 Err(err) => {
-                    last_error = Some(AppError::Clipboard(format!(
+                    let failure = AppError::Clipboard(format!(
                         "Windows DIB clipboard data temporarily unavailable: {err}"
-                    )));
+                    ));
+                    if is_clipboard_access_blocked(&failure) {
+                        return Err(failure);
+                    }
+                    last_error = Some(failure);
                 }
             }
         }
@@ -549,6 +564,21 @@ impl ClipboardReader {
             return Err(error);
         }
         Ok(None)
+    }
+}
+
+/// Do not try further native image formats if the clipboard cannot be opened
+/// or the owner returned a native timeout. This is independent of PNG decoding.
+#[cfg(target_os = "windows")]
+fn is_clipboard_access_blocked(err: &AppError) -> bool {
+    match err {
+        AppError::Clipboard(message) => {
+            message.contains("clipboard busy")
+                || message.contains("write pending")
+                || message.contains("OSError(5)")
+                || message.contains("OSError(1460)")
+        }
+        _ => false,
     }
 }
 
