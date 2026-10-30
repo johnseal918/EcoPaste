@@ -61,6 +61,16 @@ const WINDOWS_BURST_WINDOW: Duration = Duration::from_secs(2);
 const WINDOWS_EMPTY_SETTLE_WINDOW: Duration = Duration::from_millis(500);
 #[cfg(target_os = "windows")]
 const WINDOWS_PENDING_RETRY_INTERVAL: Duration = Duration::from_millis(8);
+/// Retry absent formats without repeatedly starting a Win32 or IPC read every
+/// 8ms. Preserve the existing 500ms settle window; no early attempt-count gate.
+#[cfg(target_os = "windows")]
+const WINDOWS_EMPTY_BACKOFF: [Duration; 5] = [
+    Duration::from_millis(32),
+    Duration::from_millis(64),
+    Duration::from_millis(96),
+    Duration::from_millis(128),
+    Duration::from_millis(160),
+];
 /// Retry a potentially incomplete Windows clipboard for a bounded time.
 /// A rapid sequence of transient read errors must not exhaust a 16-attempt
 /// counter in 144ms. Backoff avoids hammering the source application.
@@ -344,7 +354,7 @@ fn spawn_watch_thread(
             };
 
             let mut last_sequence = unsafe { GetClipboardSequenceNumber() };
-            // Current clipboard sequence + first-observed instant + next attempt.
+            // Current sequence + first-observed instant + next attempt + attempts.
             // The sequence MUST NOT be acknowledged before a valid snapshot.
             let mut pending: Option<(u32, std::time::Instant, std::time::Instant, u8)> = None;
             let mut burst_until: Option<std::time::Instant> = None;
@@ -362,6 +372,21 @@ fn spawn_watch_thread(
 
                 let sequence = unsafe { GetClipboardSequenceNumber() };
                 let now = std::time::Instant::now();
+                // A successful history paste publishes data owned by our
+                // actual Tauri HWND. That is an echo, not a new user copy.
+                // Skip it BEFORE the helper can trigger PNG/DIB delayed reads.
+                // A later real external copy gets a different owner/sequence.
+                if sequence != 0
+                    && sequence != last_sequence
+                    && source::clipboard_owner_pid() == Some(std::process::id())
+                {
+                    log::info!("clipboard self_write_skip sequence={sequence}");
+                    pending = None;
+                    last_sequence = sequence;
+                    burst_until = None;
+                    std::thread::sleep(WINDOWS_IDLE_POLL_INTERVAL);
+                    continue;
+                }
                 if sequence != 0
                     && sequence != last_sequence
                     && pending.as_ref().is_none_or(|entry| entry.0 != sequence)
@@ -386,7 +411,7 @@ fn spawn_watch_thread(
                     burst_until = Some(now + WINDOWS_BURST_WINDOW);
                 }
 
-                if let Some((target_sequence, first_seen, next_attempt, failed_attempts)) = pending {
+                if let Some((target_sequence, first_seen, next_attempt, prior_attempts)) = pending {
                     if now >= next_attempt {
                         // A newer clipboard publication invalidates the pending
                         // request without ever opening the stale format.
@@ -414,10 +439,7 @@ fn spawn_watch_thread(
                             );
                         }
                         let elapsed = first_seen.elapsed();
-                        let failures = failed_attempts.saturating_add(u8::from(matches!(
-                            outcome,
-                            CaptureSnapshot::ReadFailed(_)
-                        )));
+                        let attempts = prior_attempts.saturating_add(1);
                         if matches!(outcome, CaptureSnapshot::Stale) {
                             // The copied bytes no longer match the event that
                             // started this attempt. Pick up the new sequence.
@@ -433,7 +455,7 @@ fn spawn_watch_thread(
                                 log::warn!(
                                     "clipboard sequence={target_sequence} read_failed: retiring_after_ms={} attempts={} reason={reason:?} owner_pid={:?}",
                                     elapsed.as_millis(),
-                                    failures,
+                                    attempts,
                                     source::clipboard_owner_pid()
                                 );
                             }
@@ -442,18 +464,25 @@ fn spawn_watch_thread(
                         } else {
                             let delay = match outcome {
                                 CaptureSnapshot::ReadFailed(_) => WINDOWS_FAILED_BACKOFF
-                                    [(failures.saturating_sub(1) as usize).min(WINDOWS_FAILED_BACKOFF.len() - 1)],
-                                CaptureSnapshot::Empty if source::clipboard_owner_is_wechat() => {
-                                    Duration::from_millis(40)
-                                }
+                                    [(attempts.saturating_sub(1) as usize).min(WINDOWS_FAILED_BACKOFF.len() - 1)],
+                                CaptureSnapshot::Empty => WINDOWS_EMPTY_BACKOFF
+                                    [(attempts.saturating_sub(1) as usize).min(WINDOWS_EMPTY_BACKOFF.len() - 1)],
                                 _ if excel_copy => WINDOWS_EXCEL_PENDING_RETRY_INTERVAL,
                                 _ => WINDOWS_PENDING_RETRY_INTERVAL,
+                            };
+                            // Keep the original 500ms empty-settle deadline,
+                            // but avoid 36 separate IPC/native reads in 504ms.
+                            let next = std::time::Instant::now() + delay;
+                            let next = if matches!(outcome, CaptureSnapshot::Empty) {
+                                next.min(first_seen + WINDOWS_EMPTY_SETTLE_WINDOW)
+                            } else {
+                                next
                             };
                             pending = Some((
                                 target_sequence,
                                 first_seen,
-                                std::time::Instant::now() + delay,
-                                failures,
+                                next,
+                                attempts,
                             ));
                         }
                     }
