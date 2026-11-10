@@ -287,6 +287,13 @@ pub fn show_window(app_handle: &AppHandle, label: &str) -> Result<()> {
 
     if label == CLIPBOARD_WINDOW_LABEL {
         if !was_visible {
+            // An awakened/dormant WebView may have missed the previous hide
+            // event. Invalidate any stale native show request and discard
+            // the old preview before the main window becomes visible again.
+            // A new preview must be opened by fresh pointer motion or Space.
+            if let Err(err) = preview::close_clipboard_preview_now(app_handle) {
+                log::warn!("reset stale preview before clipboard show failed: {err}");
+            }
             restore_always_show_side_panels(app_handle);
         }
         if let Err(err) = apply_clipboard_window_layout(app_handle) {
