@@ -194,9 +194,12 @@ export function useClipboardPreviewController(
    */
   const handleItemPointerEnter = (
     item: ClipboardItem,
-    _event: ReactPointerEvent<HTMLDivElement>,
+    event: ReactPointerEvent<HTMLDivElement>,
   ) => {
     if (!clipboardWindowVisibleRef.current) return;
+    // Establish a position baseline without opening a preview. A subsequent
+    // genuinely different pointermove coordinate is required to arm hover.
+    lastPointerLocationRef.current = { x: event.clientX, y: event.clientY };
     if (previewSessionRef.current?.trigger !== "keyboard") return;
 
     cancelHoverPreview();
