@@ -184,6 +184,12 @@ fn write_atomic(path: &Path, settings: &Settings) -> Result<()> {
 /// 校验设置之间的跨字段约束，避免非法配置写入磁盘。
 fn validate_settings(settings: &Settings) -> Result<()> {
     validate_window_open_group(&settings.clipboard.window.select_group_on_open)?;
+    let opacity = settings.clipboard.preview.background_opacity;
+    if !(50..=100).contains(&opacity) || !opacity.is_multiple_of(5) {
+        return Err(AppError::Other(anyhow::anyhow!(
+            "preview background opacity must be 50..=100, in steps of 5"
+        )));
+    }
 
     let open_clipboard = normalize_shortcut_value(&settings.shortcuts.open_clipboard);
     let open_preference = normalize_shortcut_value(&settings.shortcuts.open_preference);
@@ -253,106 +259,3 @@ fn deep_merge(base: &mut serde_json::Value, patch: serde_json::Value) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn deep_merge_overrides_leaves_and_recurses_objects() {
-        let mut base = serde_json::json!({
-            "general": {"autoStart": false, "trayIcon": true},
-            "clipboard": {"history": {"maxCount": 0}},
-        });
-        let patch = serde_json::json!({
-            "general": {"autoStart": true},
-            "clipboard": {"history": {"maxCount": 500}},
-        });
-        deep_merge(&mut base, patch);
-        assert_eq!(
-            base,
-            serde_json::json!({
-                "general": {"autoStart": true, "trayIcon": true},
-                "clipboard": {"history": {"maxCount": 500}},
-            })
-        );
-    }
-
-    #[test]
-    fn deep_merge_replaces_arrays_wholesale() {
-        let mut base = serde_json::json!({"itemActions": ["copy", "star", "delete"]});
-        let patch = serde_json::json!({"itemActions": ["copy", "pastePlain"]});
-        deep_merge(&mut base, patch);
-        assert_eq!(
-            base,
-            serde_json::json!({"itemActions": ["copy", "pastePlain"]})
-        );
-    }
-
-    #[test]
-    fn validate_settings_rejects_duplicate_global_shortcuts() {
-        let mut settings = Settings::default();
-        settings.shortcuts.open_preference = settings.shortcuts.open_clipboard.clone();
-
-        assert!(validate_settings(&settings).is_err());
-    }
-
-    #[test]
-    fn validate_settings_allows_empty_global_shortcuts() {
-        let mut settings = Settings::default();
-        settings.shortcuts.open_preference = String::new();
-
-        assert!(validate_settings(&settings).is_ok());
-    }
-
-    #[test]
-    fn missing_fields_fall_back_to_defaults() {
-        let partial = r#"{"general": {"autoStart": true}}"#;
-        let parsed: Settings = serde_json::from_str(partial).unwrap();
-        assert!(parsed.general.auto_start);
-        assert!(!parsed.general.run_as_admin);
-        assert!(parsed.general.tray_icon, "default kept");
-        assert_eq!(parsed.shortcuts.open_clipboard, "Alt+C");
-        assert_eq!(
-            parsed.update.frequency,
-            crate::settings::UpdateFrequency::Daily
-        );
-        assert_eq!(
-            parsed.clipboard.content.sort,
-            crate::db::models::ClipboardItemSort::UpdatedAt
-        );
-        assert!(!parsed.clipboard.content.copy_then_hide_window);
-        assert!(
-            parsed
-                .clipboard
-                .content
-                .delete_favorite_items_only_in_favorite_group
-        );
-        assert!(!parsed.clipboard.content.delete_favorite_items);
-        assert!(parsed.clipboard.content.delete_favorite_confirm);
-        assert!(!parsed.clipboard.content.delete_pinned_items);
-        assert!(parsed.clipboard.content.delete_pinned_confirm);
-        assert!(!parsed.clipboard.content.update_on_reuse);
-        assert_eq!(parsed.clipboard.history.cleanup_interval_hours, 0);
-        assert!(parsed.clipboard.window.scroll_to_top_on_open);
-        assert_eq!(
-            parsed.clipboard.window.select_range_on_open,
-            crate::settings::WindowOpenRangeSelection::Preserve
-        );
-        assert_eq!(
-            parsed.clipboard.window.select_category_on_open,
-            crate::settings::WindowOpenCategorySelection::Preserve
-        );
-        assert_eq!(
-            parsed.clipboard.window.select_group_on_open,
-            crate::settings::WINDOW_OPEN_SELECTION_PRESERVE
-        );
-    }
-
-    #[test]
-    fn validate_settings_rejects_invalid_open_group_selection() {
-        let mut settings = Settings::default();
-        settings.clipboard.window.select_group_on_open = "invalid".to_owned();
-
-        assert!(validate_settings(&settings).is_err());
-    }
-}

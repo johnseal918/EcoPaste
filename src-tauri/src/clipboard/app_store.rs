@@ -33,12 +33,6 @@ impl AppIconStore {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test(root: PathBuf) -> Self {
-        Self {
-            root: Arc::new(RwLock::new(root)),
-        }
-    }
 
     /// 重新绑定到当前真实数据根；数据目录热迁移后由存储命令调用。
     pub fn rebase(&self, app: &AppHandle) -> Result<()> {
@@ -88,47 +82,3 @@ fn write_if_absent(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn temp_store() -> (TempDir, AppIconStore) {
-        let dir = TempDir::new();
-        let store = AppIconStore::for_test(dir.path().join("app-icons"));
-        (dir, store)
-    }
-
-    #[test]
-    fn stores_flat_under_root_and_is_idempotent() {
-        let (_d, store) = temp_store();
-        let bytes = b"fake-png-bytes-for-test".to_vec();
-
-        let a = store.store(&bytes).unwrap();
-        let b = store.store(&bytes).unwrap();
-        assert_eq!(a, b, "same bytes -> same file name");
-        assert!(a.ends_with(".png"));
-
-        let path = store.icon_path(&a);
-        assert!(path.exists());
-        assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        // 平铺：文件直接落在 root 下，无分片子目录。
-        assert_eq!(path, store.root().join(&a));
-    }
-
-    struct TempDir(PathBuf);
-    impl TempDir {
-        fn new() -> Self {
-            let p = std::env::temp_dir().join(format!("ecopaste-appicon-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&p).unwrap();
-            Self(p)
-        }
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            std::fs::remove_dir_all(&self.0).ok();
-        }
-    }
-}

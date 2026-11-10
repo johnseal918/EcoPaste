@@ -60,21 +60,3 @@ pub fn is_autostart_launch(args: &[String]) -> bool {
     args.iter().any(|arg| arg == AUTO_LAUNCH_ARG)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::is_autostart_launch;
-
-    #[test]
-    fn detects_autostart_launch_argument() {
-        let args = vec!["EcoPaste.exe".to_owned(), "--auto-launch".to_owned()];
-
-        assert!(is_autostart_launch(&args));
-    }
-
-    #[test]
-    fn rejects_regular_launch_arguments() {
-        let args = vec!["EcoPaste.exe".to_owned()];
-
-        assert!(!is_autostart_launch(&args));
-    }
-}

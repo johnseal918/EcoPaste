@@ -1,0 +1,27 @@
+{
+  "at": "2026-10-28T08:02:24.749303+00:00",
+  "sequence": 5635,
+  "owner_pid": 75200,
+  "formats": [
+    {
+      "code": 49161,
+      "name": "DataObject"
+    },
+    {
+      "code": 15,
+      "name": ""
+    },
+    {
+      "code": 49414,
+      "name": "UniformResourceLocatorW"
+    },
+    {
+      "code": 49406,
+      "name": "UniformResourceLocator"
+    },
+    {
+      "code": 49171,
+      "name": "Ole Private Data"
+    }
+  ]
+}

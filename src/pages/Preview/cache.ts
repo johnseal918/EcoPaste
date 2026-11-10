@@ -11,7 +11,8 @@ export function readCachedPayload(
 ) {
   const keyPrefix = `${itemId}:`;
   const keySuffix = `:${redactSecrets ? "redacted" : "full"}`;
-  const key = [...cache.keys()].find((entryKey) => {
+  // 同一条目可能曾缓存多个版本，应优先采用最后插入的版本。
+  const key = [...cache.keys()].reverse().find((entryKey) => {
     return entryKey.startsWith(keyPrefix) && entryKey.endsWith(keySuffix);
   });
 
@@ -27,6 +28,32 @@ export function readCachedPayload(
 }
 
 /**
+ * 记录正文修改/删除/导入后按 id 清除所有历史版本及脱敏变体。
+ */
+export function invalidateCachedPayload(
+  cache: Map<string, ClipboardPreviewPayload>,
+  itemId: string,
+) {
+  const prefix = `${itemId}:`;
+  for (const key of cache.keys()) {
+    if (key.startsWith(prefix)) cache.delete(key);
+  }
+}
+
+/**
+ * 同一次连续悬停可复用缓存。新预览会话必须重新读取数据库最新正文；
+ * 否则按 id 命中旧缓存，即使该记录 updatedAt 已变，仍会显示旧文本。
+ */
+export function beginPreviewCacheSession(
+  cache: Map<string, ClipboardPreviewPayload>,
+  previousSessionId: number | null,
+  nextSessionId: number,
+): number {
+  if (previousSessionId !== nextSessionId) cache.clear();
+  return nextSessionId;
+}
+
+/**
  * 写入最近预览 payload，key 绑定 updatedAt 避免内容复用过期。
  */
 export function writeCachedPayload(
@@ -34,6 +61,8 @@ export function writeCachedPayload(
   nextPayload: ClipboardPreviewPayload,
   redactSecrets: boolean,
 ) {
+  // 新版本进入缓存时丢弃本 id 以前的版本，避免同条目命中较早的正文。
+  invalidateCachedPayload(cache, nextPayload.id);
   cache.set(cacheKey(nextPayload, redactSecrets), nextPayload);
 
   while (cache.size > PREVIEW_CACHE_LIMIT) {

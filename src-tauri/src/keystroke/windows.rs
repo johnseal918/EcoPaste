@@ -72,7 +72,10 @@ pub fn simulate_paste() -> Result<()> {
         )
     };
     if sent as usize != inputs.len() {
+        log::warn!("paste SendInput injected={} expected={}", sent, inputs.len());
         return Err(anyhow!("SendInput injected {sent}/{} events", inputs.len()).into());
     }
+    // Delivery to the target edit control must still be verified in real use.
+    log::info!("paste SendInput injected={} expected={}", sent, inputs.len());
     Ok(())
 }

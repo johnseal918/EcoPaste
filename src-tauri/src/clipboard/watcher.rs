@@ -13,10 +13,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+#[cfg(target_os = "macos")]
 use clipboard_rs::{ClipboardHandler, ClipboardWatcher, ClipboardWatcherContext};
 use serde_json::json;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager};
+#[cfg(target_os = "windows")]
+use winapi::um::winuser::GetClipboardSequenceNumber;
 
 use super::app_store::AppIconStore;
 use super::apps_registry::AppsRegistry;
@@ -37,23 +40,105 @@ pub const CLIPBOARD_UPDATED_EVENT: &str = "clipboard://updated";
 /// macOS 轮询 `changeCount` 的间隔。上游 clipboard-rs 默认 500ms，对复制响应（尤其图片）
 /// 偏慢；我们 fork 出 `new_with_interval` 后调到 120ms，跟手且 CPU 开销可忽略。
 /// Windows 走事件驱动（`WM_CLIPBOARDUPDATE`），此值被忽略。
+#[cfg(target_os = "macos")]
 const CLIPBOARD_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(120);
+
+/// Windows 不再依赖消息处理完成速度来决定何时读剪贴板：直接盯 sequence number。
+/// 空闲时 8ms 已远快于人工连续 Ctrl+C；检测到一次变化后 2 秒内进入 1ms burst 模式，
+/// 把下一次复制覆盖前的读取窗口压到最小。这里只做 GetClipboardSequenceNumber + sleep，
+/// 没有 DB / 图标 / WebView 工作。
+#[cfg(target_os = "windows")]
+const WINDOWS_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(8);
+#[cfg(target_os = "windows")]
+const WINDOWS_BURST_POLL_INTERVAL: Duration = Duration::from_millis(1);
+#[cfg(target_os = "windows")]
+const WINDOWS_BURST_WINDOW: Duration = Duration::from_secs(2);
+
+/// Empty formats are retryable for a short settling period. This is separate
+/// from sampling frequency: a fast poll does not help if the reader reports a
+/// temporary lock failure as permanently empty.
+#[cfg(target_os = "windows")]
+const WINDOWS_EMPTY_SETTLE_WINDOW: Duration = Duration::from_millis(500);
+#[cfg(target_os = "windows")]
+const WINDOWS_PENDING_RETRY_INTERVAL: Duration = Duration::from_millis(8);
+/// Retry absent formats without repeatedly starting a Win32 or IPC read every
+/// 8ms. Preserve the existing 500ms settle window; no early attempt-count gate.
+#[cfg(target_os = "windows")]
+const WINDOWS_EMPTY_BACKOFF: [Duration; 5] = [
+    Duration::from_millis(32),
+    Duration::from_millis(64),
+    Duration::from_millis(96),
+    Duration::from_millis(128),
+    Duration::from_millis(160),
+];
+/// Retry a potentially incomplete Windows clipboard for a bounded time.
+/// A rapid sequence of transient read errors must not exhaust a 16-attempt
+/// counter in 144ms. Backoff avoids hammering the source application.
+#[cfg(target_os = "windows")]
+const WINDOWS_FAILED_SETTLE_WINDOW: Duration = Duration::from_secs(2);
+#[cfg(target_os = "windows")]
+const WINDOWS_FAILED_BACKOFF: [Duration; 6] = [
+    Duration::from_millis(20),
+    Duration::from_millis(40),
+    Duration::from_millis(80),
+    Duration::from_millis(140),
+    Duration::from_millis(200),
+    Duration::from_millis(250),
+];
+/// Do not seize Excel's clipboard while it is publishing a multi-format copy.
+/// Other applications retain the existing fast sequence watcher behavior.
+#[cfg(target_os = "windows")]
+const WINDOWS_EXCEL_FIRST_READ_SETTLE: Duration = Duration::from_millis(120);
+#[cfg(target_os = "windows")]
+const WINDOWS_EXCEL_PENDING_RETRY_INTERVAL: Duration = Duration::from_millis(120);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureFailure {
+    AccessBusy,
+    FormatNotReady,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureSnapshot {
+    Queued,
+    Empty,
+    ReadFailed(CaptureFailure),
+    Stale,
+}
+
+/// Valid snapshots are acknowledged immediately. Stable empty formats and
+/// failed reads are retired after finite settling periods.
+#[cfg(target_os = "windows")]
+fn should_ack_snapshot(outcome: CaptureSnapshot, pending_age: Duration) -> bool {
+    matches!(outcome, CaptureSnapshot::Queued)
+        || (matches!(outcome, CaptureSnapshot::Empty) && pending_age >= WINDOWS_EMPTY_SETTLE_WINDOW)
+        || (matches!(outcome, CaptureSnapshot::ReadFailed(_))
+            && pending_age >= WINDOWS_FAILED_SETTLE_WINDOW)
+}
 
 /// Another clipboard listener can briefly hold the Windows clipboard open. Retry those read
 /// failures within a bounded window before dropping the update.
-const CLIPBOARD_READ_RETRY_DELAYS: [Duration; 3] = [
-    Duration::from_millis(15),
-    Duration::from_millis(35),
-    Duration::from_millis(75),
+#[cfg(target_os = "macos")]
+const CLIPBOARD_READ_RETRY_DELAYS: [Duration; 5] = [
+    Duration::from_millis(1),
+    Duration::from_millis(2),
+    Duration::from_millis(4),
+    Duration::from_millis(8),
+    Duration::from_millis(16),
 ];
 
+#[cfg(target_os = "macos")]
 fn read_with_retry<T, E>(
     retry_delays: &[Duration],
     mut read: impl FnMut() -> Result<Option<T>, E>,
 ) -> Result<Option<T>, E> {
     let mut result = read();
     for delay in retry_delays {
-        if result.is_ok() {
+        // An apparently empty Windows clipboard can be a transient snapshot
+        // while a copy application is filling its formats, not a final outcome.
+        // Only a captured payload is final; retry both Err and Ok(None).
+        if matches!(result, Ok(Some(_))) {
             return result;
         }
         std::thread::sleep(*delay);
@@ -95,7 +180,9 @@ pub fn materialize_source(
     }
 
     let icon_file = src
-        .icon_png
+        .icon_path
+        .as_deref()
+        .and_then(|path| super::icon::icon_png(path, None))
         .as_deref()
         .and_then(|bytes| match store.store(bytes) {
             Ok(name) => Some(name),
@@ -201,6 +288,7 @@ pub fn init(app: &AppHandle) -> crate::core::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn spawn_watch_thread(
     app: AppHandle,
     guard: Arc<WritebackGuard>,
@@ -212,7 +300,6 @@ fn spawn_watch_thread(
     std::thread::Builder::new()
         .name("clipboard-watcher".to_owned())
         .spawn(move || {
-            // 平台剪贴板句柄在本线程内构造，不跨线程移动。
             let reader = match ClipboardReader::new() {
                 Ok(reader) => reader,
                 Err(err) => {
@@ -241,12 +328,178 @@ fn spawn_watch_thread(
             });
 
             log::info!("clipboard watcher started");
-            // 阻塞直至进程退出。
             watcher.start_watch();
         })
         .expect("failed to spawn clipboard watcher thread");
 }
 
+#[cfg(target_os = "windows")]
+fn spawn_watch_thread(
+    app: AppHandle,
+    guard: Arc<WritebackGuard>,
+    store: ImageStore,
+    app_icon_store: AppIconStore,
+    registry: AppsRegistry,
+    pause: WatcherPause,
+) {
+    std::thread::Builder::new()
+        .name("clipboard-sequence-watcher".to_owned())
+        .spawn(move || {
+            let reader = match ClipboardReader::new() {
+                Ok(reader) => reader,
+                Err(err) => {
+                    log::error!("clipboard sequence watcher: failed to create reader: {err}");
+                    return;
+                }
+            };
+
+            let mut last_sequence = unsafe { GetClipboardSequenceNumber() };
+            // Current sequence + first-observed instant + next attempt + attempts.
+            // The sequence MUST NOT be acknowledged before a valid snapshot.
+            let mut pending: Option<(u32, std::time::Instant, std::time::Instant, u8)> = None;
+            let mut burst_until: Option<std::time::Instant> = None;
+            log::info!("clipboard Windows sequence watcher started");
+
+            loop {
+                if pause.is_paused() {
+                    // Explicit user pause is the only intentional loss of history.
+                    last_sequence = unsafe { GetClipboardSequenceNumber() };
+                    pending = None;
+                    burst_until = None;
+                    std::thread::sleep(Duration::from_millis(25));
+                    continue;
+                }
+
+                let sequence = unsafe { GetClipboardSequenceNumber() };
+                let now = std::time::Instant::now();
+                // A successful history paste publishes data owned by our
+                // actual Tauri HWND. That is an echo, not a new user copy.
+                // Skip it BEFORE the helper can trigger PNG/DIB delayed reads.
+                // A later real external copy gets a different owner/sequence.
+                if sequence != 0
+                    && sequence != last_sequence
+                    && source::clipboard_owner_pid() == Some(std::process::id())
+                {
+                    log::info!("clipboard self_write_skip sequence={sequence}");
+                    pending = None;
+                    last_sequence = sequence;
+                    burst_until = None;
+                    std::thread::sleep(WINDOWS_IDLE_POLL_INTERVAL);
+                    continue;
+                }
+                if sequence != 0
+                    && sequence != last_sequence
+                    && pending.as_ref().is_none_or(|entry| entry.0 != sequence)
+                {
+                    if let Some((unread, first_seen, _, _)) = pending.take() {
+                        log::warn!(
+                            "clipboard sequence {unread} was replaced by {sequence} before a readable snapshot (pending {}ms)",
+                            first_seen.elapsed().as_millis()
+                        );
+                    }
+                    let excel_copy = source::clipboard_may_be_excel();
+                    let first_attempt = now
+                        + if excel_copy {
+                            WINDOWS_EXCEL_FIRST_READ_SETTLE
+                        } else {
+                            Duration::ZERO
+                        };
+                    pending = Some((sequence, now, first_attempt, 0));
+                    if excel_copy {
+                        log::info!("clipboard sequence={sequence} excel_initial_settle_ms=120");
+                    }
+                    burst_until = Some(now + WINDOWS_BURST_WINDOW);
+                }
+
+                if let Some((target_sequence, first_seen, next_attempt, prior_attempts)) = pending {
+                    if now >= next_attempt {
+                        // A newer clipboard publication invalidates the pending
+                        // request without ever opening the stale format.
+                        if unsafe { GetClipboardSequenceNumber() } != target_sequence {
+                            continue;
+                        }
+                        let excel_copy = source::clipboard_may_be_excel();
+                        let attempt_started = std::time::Instant::now();
+                        let outcome = capture_and_enqueue(
+                            &reader,
+                            Some(target_sequence),
+                            first_seen.elapsed(),
+                            &app,
+                            &guard,
+                            &store,
+                            &app_icon_store,
+                            &registry,
+                        );
+                        let read_elapsed = attempt_started.elapsed();
+                        if read_elapsed >= Duration::from_millis(250) {
+                            log::warn!(
+                                "clipboard sequence={target_sequence} owner_pid={:?} read_ms={} outcome={outcome:?}",
+                                source::clipboard_owner_pid(),
+                                read_elapsed.as_millis()
+                            );
+                        }
+                        let elapsed = first_seen.elapsed();
+                        let attempts = prior_attempts.saturating_add(1);
+                        if matches!(outcome, CaptureSnapshot::Stale) {
+                            // The copied bytes no longer match the event that
+                            // started this attempt. Pick up the new sequence.
+                            log::info!("clipboard sequence={target_sequence} stale_after_read=true");
+                            pending = None;
+                        } else if should_ack_snapshot(outcome, elapsed) {
+                            if matches!(outcome, CaptureSnapshot::Empty) {
+                                log::info!(
+                                    "clipboard sequence={target_sequence} empty_after_ms={}",
+                                    elapsed.as_millis()
+                                );
+                            } else if let CaptureSnapshot::ReadFailed(reason) = outcome {
+                                log::warn!(
+                                    "clipboard sequence={target_sequence} read_failed: retiring_after_ms={} attempts={} reason={reason:?} owner_pid={:?}",
+                                    elapsed.as_millis(),
+                                    attempts,
+                                    source::clipboard_owner_pid()
+                                );
+                            }
+                            last_sequence = target_sequence;
+                            pending = None;
+                        } else {
+                            let delay = match outcome {
+                                CaptureSnapshot::ReadFailed(_) => WINDOWS_FAILED_BACKOFF
+                                    [(attempts.saturating_sub(1) as usize).min(WINDOWS_FAILED_BACKOFF.len() - 1)],
+                                CaptureSnapshot::Empty => WINDOWS_EMPTY_BACKOFF
+                                    [(attempts.saturating_sub(1) as usize).min(WINDOWS_EMPTY_BACKOFF.len() - 1)],
+                                _ if excel_copy => WINDOWS_EXCEL_PENDING_RETRY_INTERVAL,
+                                _ => WINDOWS_PENDING_RETRY_INTERVAL,
+                            };
+                            // Keep the original 500ms empty-settle deadline,
+                            // but avoid 36 separate IPC/native reads in 504ms.
+                            let next = std::time::Instant::now() + delay;
+                            let next = if matches!(outcome, CaptureSnapshot::Empty) {
+                                next.min(first_seen + WINDOWS_EMPTY_SETTLE_WINDOW)
+                            } else {
+                                next
+                            };
+                            pending = Some((
+                                target_sequence,
+                                first_seen,
+                                next,
+                                attempts,
+                            ));
+                        }
+                    }
+                }
+
+                let in_burst = burst_until.is_some_and(|until| std::time::Instant::now() < until);
+                std::thread::sleep(if in_burst {
+                    WINDOWS_BURST_POLL_INTERVAL
+                } else {
+                    WINDOWS_IDLE_POLL_INTERVAL
+                });
+            }
+        })
+        .expect("failed to spawn clipboard sequence watcher thread");
+}
+
+#[cfg(target_os = "macos")]
 struct ClipboardChangeHandler {
     reader: ClipboardReader,
     app: AppHandle,
@@ -257,313 +510,178 @@ struct ClipboardChangeHandler {
     pause: WatcherPause,
 }
 
+#[cfg(target_os = "macos")]
 impl ClipboardHandler for ClipboardChangeHandler {
     fn on_clipboard_change(&mut self) {
-        // 用户从托盘关掉「监听」时直接早退，不读取、不入库、不 emit。
         if self.pause.is_paused() {
             return;
         }
 
-        // **先**抓前台应用：等异步入库再问，前台早就切回我们自己了。
-        // 自身写回的事件会在下方 guard 处被丢弃，但 detect 仍会无害地返回我们自己的 bundle id——
-        // 顺序换不得：guard 判定依赖 content_hash，必须先把 payload 读出来才能判，
-        // 而 read_all 期间用户可能已经切走前台。
-        let source = source::detect_frontmost();
-
-        // 用户在偏好里勾选了「过滤此应用」时，本次复制整条直接丢弃——不读取、不入库、不 emit。
-        // 提前到读 payload 前判定，省掉无效的 OS 调用 + 图片解码开销。
-        if let Some(src) = &source {
-            let excluded = self
-                .app
-                .try_state::<SettingsStore>()
-                .map(|s| {
-                    s.snapshot()
-                        .clipboard
-                        .filters
-                        .excluded_app_ids
-                        .iter()
-                        .any(|id| id == &src.id)
-                })
-                .unwrap_or(false);
-            if excluded {
-                return;
-            }
-        }
-
-        let settings = self
-            .app
-            .try_state::<SettingsStore>()
-            .map(|s| s.snapshot())
-            .unwrap_or_default();
-
-        // 同步读取 + 转换（含图片落盘）：拿到 content_hash 才能判定是否为自身写回。
-        let payload = match read_with_retry(&CLIPBOARD_READ_RETRY_DELAYS, || {
-            self.reader.read_with_capture(&settings.clipboard.capture)
-        }) {
-            Ok(Some(payload)) => payload,
-            Ok(None) => return,
-            Err(err) => {
-                log::warn!("clipboard watcher: read failed: {err}");
-                return;
-            }
-        };
-
-        let mut item = match build_item_with_settings(
+        capture_and_enqueue(
+            &self.reader,
+            None,
+            Duration::MAX,
+            &self.app,
+            &self.guard,
             &self.store,
-            &payload,
-            &settings.clipboard.capture,
-            &settings.clipboard.sensitive,
-            settings.clipboard.content.copy_plain,
-        ) {
-            Ok(Some(item)) => item,
-            Ok(None) => return,
-            Err(err) => {
-                log::warn!("clipboard watcher: build item failed: {err}");
-                return;
-            }
-        };
-
-        // 自身写回触发的变更：跳过入库，避免回环。
-        if self.guard.should_skip(&item.content_hash) {
-            return;
-        }
-
-        let source_app =
-            source.map(|src| materialize_source(&self.app_icon_store, Some(&self.registry), src));
-        if let Some(src) = &source_app {
-            item.source_app_id = Some(src.id.clone());
-        }
-
-        // 入库与 emit 交给异步运行时；只移动 Send 数据，不碰平台句柄。
-        let app = self.app.clone();
-        tauri::async_runtime::spawn(async move {
-            let pool = app.state::<crate::db::DatabaseState>().pool().await;
-            if let Err(err) = persist_and_notify(&app, &pool, &item, source_app.as_ref()).await {
-                log::error!("clipboard watcher: persist failed: {err}");
-            }
-        });
+            &self.app_icon_store,
+            &self.registry,
+        );
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::cell::Cell;
+fn capture_and_enqueue(
+    reader: &ClipboardReader,
+    expected_sequence: Option<u32>,
+    clipboard_age: Duration,
+    app: &AppHandle,
+    guard: &Arc<WritebackGuard>,
+    store: &ImageStore,
+    app_icon_store: &AppIconStore,
+    registry: &AppsRegistry,
+) -> CaptureSnapshot {
+    let settings = app
+        .try_state::<SettingsStore>()
+        .map(|s| s.snapshot())
+        .unwrap_or_default();
 
-    use clipboard_rs::{Clipboard, ClipboardContext};
-
-    use super::*;
-    use crate::clipboard::{build_item, ImageStore, WritebackGuard};
-    use crate::db::items::find_item_by_id;
-    use crate::db::test_support::memory_pool;
-
-    const ZERO_DELAY_RETRIES: [Duration; 3] = [Duration::ZERO; 3];
-
-    #[test]
-    fn clipboard_read_retry_returns_immediate_success() {
-        let attempts = Cell::new(0);
-
-        let result = read_with_retry(&ZERO_DELAY_RETRIES, || {
-            attempts.set(attempts.get() + 1);
-            Ok::<_, &'static str>(Some("captured"))
-        });
-
-        assert_eq!(result, Ok(Some("captured")));
-        assert_eq!(attempts.get(), 1);
-    }
-
-    #[test]
-    fn clipboard_read_retry_recovers_after_transient_error() {
-        let attempts = Cell::new(0);
-
-        let result = read_with_retry(&ZERO_DELAY_RETRIES, || {
-            attempts.set(attempts.get() + 1);
-            if attempts.get() == 1 {
-                Err("clipboard busy")
+    // 在可能耗时的剪贴板格式渲染前捕获 owner，避免复制后切窗导致来源错判。
+    let source_hint = source::capture_clipboard_source_hint();
+    // Windows 外层 pending 会处理短暂占用；不再对每次失败在内部重读六次昂贵格式。
+    #[cfg(target_os = "windows")]
+    let read_result = reader.read_with_capture_age(&settings.clipboard.capture, clipboard_age);
+    #[cfg(target_os = "macos")]
+    let read_result = read_with_retry(&CLIPBOARD_READ_RETRY_DELAYS, || {
+        reader.read_with_capture(&settings.clipboard.capture)
+    });
+    let payload = match read_result {
+        Ok(Some(payload)) => payload,
+        Ok(None) => return CaptureSnapshot::Empty,
+        Err(err) => {
+            // Release builds need to retain the error class and OS code to
+            // distinguish a busy owner from unavailable delayed data.
+            let description = err.to_string();
+            let reason = if description.contains("busy")
+                || description.contains("in progress")
+                || description.contains("write pending")
+            {
+                CaptureFailure::AccessBusy
+            } else if matches!(err, crate::core::AppError::Clipboard(_)) {
+                CaptureFailure::FormatNotReady
             } else {
-                Ok(Some("captured"))
-            }
-        });
-
-        assert_eq!(result, Ok(Some("captured")));
-        assert_eq!(attempts.get(), 2);
-    }
-
-    #[test]
-    fn clipboard_read_retry_does_not_retry_empty_content() {
-        let attempts = Cell::new(0);
-
-        let result = read_with_retry(&ZERO_DELAY_RETRIES, || {
-            attempts.set(attempts.get() + 1);
-            Ok::<Option<&'static str>, &'static str>(None)
-        });
-
-        assert_eq!(result, Ok(None));
-        assert_eq!(attempts.get(), 1);
-    }
-
-    #[test]
-    fn clipboard_read_retry_returns_final_error_after_exhaustion() {
-        let attempts = Cell::new(0);
-
-        let result = read_with_retry(&ZERO_DELAY_RETRIES, || {
-            attempts.set(attempts.get() + 1);
-            Err::<Option<&'static str>, _>(attempts.get())
-        });
-
-        assert_eq!(result, Err(4));
-        assert_eq!(attempts.get(), 4);
-    }
-
-    fn temp_image_store() -> (TempDir, ImageStore) {
-        let dir = TempDir::new();
-        let store = ImageStore::for_test(dir.path().join("resources").join("clipboard-images"));
-        (dir, store)
-    }
-
-    // 复刻 on_clipboard_change 的同步部分（读取 → 转换 → 去重判定）+ async 入库，
-    // 但绕开 Tauri AppHandle / emit（无法在单测里构造），验证整条数据链路。
-    // 触碰真实系统剪贴板，默认 ignore；本机用 `cargo test -- --ignored` 验证。
-    #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "touches the real system clipboard; run with --ignored on a desktop session"]
-    async fn end_to_end_text_ingests_once_then_dedups() {
-        let pool = memory_pool().await;
-        let guard = WritebackGuard::new();
-        let (_dir, store) = temp_image_store();
-
-        // 串行锁只覆盖触碰真实剪贴板的同步段，await DB 前即释放（不跨 await 持锁）。
-        let item = {
-            let _serial = crate::clipboard::test_lock::serial();
-            let ctx = ClipboardContext::new().unwrap();
-            ctx.set_text("e2e ecopaste watcher".to_owned()).unwrap();
-
-            let reader = ClipboardReader::new().unwrap();
-            let payload = reader
-                .read_with_capture(&crate::settings::Capture::default())
-                .unwrap()
-                .expect("should read text");
-            build_item(&store, &payload)
-                .unwrap()
-                .expect("should map to item")
-        };
-        assert!(!guard.should_skip(&item.content_hash));
-
-        // 首次入库：新行。
-        let first = upsert_item(&pool, &item).await.unwrap();
-        assert!(!first.deduplicated);
-        assert_eq!(
-            find_item_by_id(&pool, &first.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .content,
-            "e2e ecopaste watcher"
-        );
-
-        // 同内容再来一次：命中去重，use_count 累加，不新增行。
-        let second = upsert_item(&pool, &item).await.unwrap();
-        assert!(second.deduplicated);
-        assert_eq!(first.id, second.id);
-        assert_eq!(
-            find_item_by_id(&pool, &first.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .use_count,
-            2
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "touches the real system clipboard; run with --ignored on a desktop session"]
-    async fn writeback_guard_suppresses_self_copy() {
-        let (_dir, store) = temp_image_store();
-        let _serial = crate::clipboard::test_lock::serial();
-        let ctx = ClipboardContext::new().unwrap();
-        ctx.set_text("self writeback content".to_owned()).unwrap();
-
-        let reader = ClipboardReader::new().unwrap();
-        let payload = reader
-            .read_with_capture(&crate::settings::Capture::default())
-            .unwrap()
-            .unwrap();
-        let item = build_item(&store, &payload).unwrap().unwrap();
-
-        // 模拟写回前登记 → 监听读到同内容 → 被抑制。
-        let guard = WritebackGuard::new();
-        guard.suppress(item.content_hash.clone());
-        assert!(guard.should_skip(&item.content_hash));
-    }
-
-    // 验证真实剪贴板图片链路：set_image（OS 原生 TIFF）→ read_with_capture 解码为 PNG →
-    // build_item 落盘原图/缩略图 → upsert 入库。覆盖合成 PNG 测不到的 OS 解码段。
-    #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "touches the real system clipboard; run with --ignored on a desktop session"]
-    async fn end_to_end_image_stores_and_ingests() {
-        use clipboard_rs::common::RustImage;
-
-        let pool = memory_pool().await;
-        let (_dir, store) = temp_image_store();
-
-        let item = {
-            let _serial = crate::clipboard::test_lock::serial();
-            let png = {
-                use std::io::Cursor;
-                let buf = image::RgbaImage::from_pixel(40, 24, image::Rgba([7, 8, 9, 255]));
-                let mut out = Cursor::new(Vec::new());
-                image::DynamicImage::ImageRgba8(buf)
-                    .write_to(&mut out, image::ImageFormat::Png)
-                    .unwrap();
-                out.into_inner()
+                CaptureFailure::Other
             };
-            let ctx = ClipboardContext::new().unwrap();
-            ctx.set_image(clipboard_rs::RustImageData::from_bytes(&png).unwrap())
-                .unwrap();
+            let win32_code = description
+                .split("OSError(")
+                .nth(1)
+                .and_then(|tail| tail.split(')').next())
+                .and_then(|digits| digits.parse::<u32>().ok());
+            #[cfg(target_os = "windows")]
+            let owner_pid = source::clipboard_owner_pid();
+            #[cfg(not(target_os = "windows"))]
+            let owner_pid: Option<u32> = None;
+            log::warn!(
+                "clipboard capture failed category={reason:?} win32_code={win32_code:?} owner_pid={owner_pid:?}"
+            );
+            return CaptureSnapshot::ReadFailed(reason);
+        }
+    };
+    #[cfg(target_os = "windows")]
+    if let Some(expected) = expected_sequence {
+        let actual = unsafe { GetClipboardSequenceNumber() };
+        if actual != expected {
+            log::info!("clipboard capture stale expected_seq={expected} actual_seq={actual}");
+            return CaptureSnapshot::Stale;
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = expected_sequence;
+    let captured_at = Utc::now();
 
-            let reader = ClipboardReader::new().unwrap();
-            let payload = reader
-                .read_with_capture(&crate::settings::Capture::default())
-                .unwrap()
-                .expect("should read image");
-            build_item(&store, &payload)
-                .unwrap()
-                .expect("image should map to item")
+    let app = app.clone();
+    let guard = guard.clone();
+    let store = store.clone();
+    let app_icon_store = app_icon_store.clone();
+    let registry = registry.clone();
+    tauri::async_runtime::spawn(async move {
+        let prepared = tauri::async_runtime::spawn_blocking(move || {
+            let mut item = match build_item_with_settings(
+                &store,
+                &payload,
+                &settings.clipboard.capture,
+                &settings.clipboard.sensitive,
+                settings.clipboard.content.copy_plain,
+            ) {
+                Ok(Some(item)) => item,
+                Ok(None) => return None,
+                Err(err) => {
+                    log::warn!("clipboard watcher: build item failed: {err}");
+                    return None;
+                }
+            };
+
+            item.created_at = captured_at;
+            item.updated_at = captured_at;
+
+            if guard.should_skip(&item.content_hash) {
+                return None;
+            }
+
+            let source = source_hint.and_then(source::resolve_frontmost_hint);
+            if let Some(src) = &source {
+                if settings
+                    .clipboard
+                    .filters
+                    .excluded_app_ids
+                    .iter()
+                    .any(|id| id == &src.id)
+                {
+                    return None;
+                }
+            }
+
+            let source_app =
+                source.map(|src| materialize_source(&app_icon_store, Some(&registry), src));
+            if let Some(src) = &source_app {
+                item.source_app_id = Some(src.id.clone());
+            }
+
+            Some((item, source_app))
+        })
+        .await;
+
+        let Some((item, source_app)) = (match prepared {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                log::error!("clipboard watcher: background preparation task failed: {err}");
+                None
+            }
+        }) else {
+            return;
         };
 
-        assert_eq!(item.kind, crate::db::models::ClipboardKind::Image);
-        assert!(item.content.ends_with(".png"));
-        assert!(item.width.unwrap() > 0 && item.height.unwrap() > 0);
-        // 复制热路径只落原图；缩略图懒生成，此刻尚未存在。
-        assert!(store.origin_path(&item.content).exists());
-        assert!(!store.thumbnail_path(&item.content).exists());
-        // 模拟前端首次取图：按需生成缩略图。
-        assert!(store.ensure_thumbnail(&item.content).unwrap().exists());
-
-        let result = upsert_item(&pool, &item).await.unwrap();
-        assert!(!result.deduplicated);
-        assert_eq!(
-            find_item_by_id(&pool, &result.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .kind,
-            crate::db::models::ClipboardKind::Image
-        );
-    }
-
-    struct TempDir(std::path::PathBuf);
-    impl TempDir {
-        fn new() -> Self {
-            let p = std::env::temp_dir().join(format!("ecopaste-watcher-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&p).unwrap();
-            Self(p)
+        let pool = app.state::<crate::db::DatabaseState>().pool().await;
+        // A transient SQLite busy/lock error must not silently discard an
+        // already frozen clipboard payload. Never repeat the system read here.
+        for (attempt, delay) in [0u64, 20, 60, 120].into_iter().enumerate() {
+            if delay > 0 {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+            match persist_and_notify(&app, &pool, &item, source_app.as_ref()).await {
+                Ok(_) => return,
+                Err(err) if attempt < 3 => {
+                    log::warn!(
+                        "clipboard watcher: persist attempt {} failed, will retry: {err}",
+                        attempt + 1
+                    );
+                }
+                Err(err) => {
+                    log::error!("clipboard watcher: persist failed after 4 attempts: {err}");
+                    return;
+                }
+            }
         }
-        fn path(&self) -> &std::path::Path {
-            &self.0
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            std::fs::remove_dir_all(&self.0).ok();
-        }
-    }
+    });
+    CaptureSnapshot::Queued
 }
+

@@ -14,7 +14,7 @@ pub enum ClipboardPayload {
 
 /// 文本载荷。同一次复制可能同时存在多种富文本表示，这里全部保留，
 /// 由下游（2.3）决定 `content` 与 `search_text` 的取舍。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TextPayload {
     /// 纯文本表示，始终尝试读取；富文本场景下可作为降级 / 检索文本。
     pub text: String,

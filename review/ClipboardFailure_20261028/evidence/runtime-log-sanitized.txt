@@ -1,0 +1,126 @@
+[2026-10-28][04:42:35][eco_paste_lib::clipboard::watcher][INFO] clipboard sequence=4807 excel_initial_settle_ms=120
+[2026-10-28][04:56:33][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 4850 was replaced by 4854 before a readable snapshot (pending 13ms)
+[2026-10-28][05:03:40][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 4889 was replaced by 4891 before a readable snapshot (pending 8ms)
+[2026-10-28][05:19:14][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 4964 was replaced by 4967 before a readable snapshot (pending 0ms)
+[2026-10-28][05:27:23][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5005 was replaced by 5006 before a readable snapshot (pending 0ms)
+[2026-10-28][05:27:23][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5006 was replaced by 5012 before a readable snapshot (pending 3ms)
+[2026-10-28][05:29:44][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5030 was replaced by 5032 before a readable snapshot (pending 18ms)
+[2026-10-28][05:30:18][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5070 was replaced by 5071 before a readable snapshot (pending 9ms)
+[2026-10-28][07:01:58][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5135 was replaced by 5137 before a readable snapshot (pending 0ms)
+[2026-10-28][07:01:58][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5137 was replaced by 5140 before a readable snapshot (pending 0ms)
+[2026-10-28][07:01:59][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5151 was replaced by 5152 before a readable snapshot (pending 7ms)
+[2026-10-28][07:01:59][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5152 was replaced by 5153 before a readable snapshot (pending 9ms)
+[2026-10-28][07:03:56][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5162 was replaced by 5166 before a readable snapshot (pending 0ms)
+[2026-10-28][07:03:56][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5166 was replaced by 5167 before a readable snapshot (pending 0ms)
+[2026-10-28][07:04:16][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5182 was replaced by 5187 before a readable snapshot (pending 0ms)
+[2026-10-28][07:04:16][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5187 was replaced by 5190 before a readable snapshot (pending 0ms)
+[2026-10-28][07:04:16][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5201 was replaced by 5202 before a readable snapshot (pending 14ms)
+[2026-10-28][07:05:29][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5218 was replaced by 5220 before a readable snapshot (pending 13ms)
+[2026-10-28][07:05:29][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5220 was replaced by 5229 before a readable snapshot (pending 5ms)
+[2026-10-28][07:05:29][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5229 was replaced by 5231 before a readable snapshot (pending 3ms)
+[2026-10-28][07:13:04][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5244 was replaced by 5245 before a readable snapshot (pending 0ms)
+[2026-10-28][07:13:33][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5265 was replaced by 5268 before a readable snapshot (pending 1ms)
+[2026-10-28][07:14:09][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5290 was replaced by 5291 before a readable snapshot (pending 13ms)
+[2026-10-28][07:14:09][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5301 was replaced by 5302 before a readable snapshot (pending 11ms)
+[2026-10-28][07:14:11][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5312 was replaced by 5313 before a readable snapshot (pending 9ms)
+[2026-10-28][07:14:12][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5323 was replaced by 5324 before a readable snapshot (pending 14ms)
+[2026-10-28][07:14:50][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence=5329 owner_pid=Some(19808) read_ms=2013 outcome=Queued
+[2026-10-28][07:14:51][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5339 was replaced by 5345 before a readable snapshot (pending 4ms)
+[2026-10-28][07:14:52][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence=5345 owner_pid=Some(71404) read_ms=1134 outcome=Queued
+[2026-10-28][07:14:52][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5346 was replaced by 5352 before a readable snapshot (pending 15ms)
+[2026-10-28][07:14:53][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5355 was replaced by 5358 before a readable snapshot (pending 0ms)
+[2026-10-28][07:14:53][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5358 was replaced by 5361 before a readable snapshot (pending 0ms)
+[2026-10-28][07:14:53][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5361 was replaced by 5363 before a readable snapshot (pending 65ms)
+[2026-10-28][07:14:53][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5363 was replaced by 5364 before a readable snapshot (pending 0ms)
+[2026-10-28][07:14:53][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5364 was replaced by 5366 before a readable snapshot (pending 0ms)
+[2026-10-28][07:14:53][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5366 was replaced by 5370 before a readable snapshot (pending 0ms)
+[2026-10-28][07:14:53][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5370 was replaced by 5372 before a readable snapshot (pending 75ms)
+[2026-10-28][07:14:56][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5379 was replaced by 5381 before a readable snapshot (pending 70ms)
+[2026-10-28][07:14:56][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5381 was replaced by 5388 before a readable snapshot (pending 10ms)
+[2026-10-28][07:14:57][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence=5388 owner_pid=Some(71404) read_ms=1104 outcome=Queued
+[2026-10-28][07:14:57][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5389 was replaced by 5391 before a readable snapshot (pending 0ms)
+[2026-10-28][07:14:57][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5391 was replaced by 5395 before a readable snapshot (pending 0ms)
+[2026-10-28][07:14:57][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5395 was replaced by 5397 before a readable snapshot (pending 72ms)
+[2026-10-28][07:15:00][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5404 was replaced by 5406 before a readable snapshot (pending 54ms)
+[2026-10-28][07:15:00][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5406 was replaced by 5413 before a readable snapshot (pending 4ms)
+[2026-10-28][07:15:00][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5413 was replaced by 5415 before a readable snapshot (pending 67ms)
+[2026-10-28][07:15:03][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5422 was replaced by 5424 before a readable snapshot (pending 57ms)
+[2026-10-28][07:15:03][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5424 was replaced by 5431 before a readable snapshot (pending 10ms)
+[2026-10-28][07:15:04][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence=5431 owner_pid=Some(71404) read_ms=1104 outcome=Queued
+[2026-10-28][07:15:04][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5432 was replaced by 5433 before a readable snapshot (pending 0ms)
+[2026-10-28][07:15:04][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5433 was replaced by 5436 before a readable snapshot (pending 0ms)
+[2026-10-28][07:15:04][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5436 was replaced by 5438 before a readable snapshot (pending 0ms)
+[2026-10-28][07:15:04][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5438 was replaced by 5440 before a readable snapshot (pending 60ms)
+[2026-10-28][07:15:06][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5447 was replaced by 5449 before a readable snapshot (pending 57ms)
+[2026-10-28][07:15:06][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5449 was replaced by 5456 before a readable snapshot (pending 2ms)
+[2026-10-28][07:15:06][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5456 was replaced by 5458 before a readable snapshot (pending 63ms)
+[2026-10-28][07:15:10][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5459 was replaced by 5460 before a readable snapshot (pending 0ms)
+[2026-10-28][07:15:11][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5479 was replaced by 5481 before a readable snapshot (pending 0ms)
+[2026-10-28][07:15:12][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence=5481 owner_pid=Some(19808) read_ms=1155 outcome=Queued
+[2026-10-28][07:22:08][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5501 was replaced by 5509 before a readable snapshot (pending 0ms)
+[2026-10-28][07:22:08][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5509 was replaced by 5510 before a readable snapshot (pending 9ms)
+[2026-10-28][07:23:32][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5524 was replaced by 5525 before a readable snapshot (pending 0ms)
+[2026-10-28][07:24:02][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence=5525 owner_pid=Some(19808) read_ms=30012 outcome=Empty
+[2026-10-28][07:25:22][webview:yb@http://tauri.localhost/assets/index-C2Ch5GsY.js:11:18897][ERROR] invoke paste_clipboard_item failed: {"kind":"Clipboard","message":"Empty clipboard error, code = OSError(1418): 线程没有打开的剪贴板。"}
+[2026-10-28][07:25:22][webview:yb@http://tauri.localhost/assets/index-C2Ch5GsY.js:11:18897][ERROR] unhandled promise rejection: {"reason":{"kind":"Clipboard","message":"Empty clipboard error, code = OSError(1418): 线程没有打开的剪贴板。"}}
+[2026-10-28][07:25:41][eco_paste_lib::settings::store][INFO] settings store ready at "<LOCALAPPDATA>\\com.ayangweb.eco-paste\\prod\\config\\settings.json"
+[2026-10-28][07:25:41][eco_paste_lib::db::init][INFO] sqlite pool ready at "<LOCALAPPDATA>\\com.ayangweb.eco-paste\\prod\\db\\clipboard.db"
+[2026-10-28][07:25:41][eco_paste_lib::clipboard::watcher][INFO] clipboard Windows sequence watcher started
+[2026-10-28][07:25:54][webview:yb@http://tauri.localhost/assets/index-C2Ch5GsY.js:11:18897][ERROR] invoke paste_clipboard_item failed: {"kind":"Clipboard","message":"Empty clipboard error, code = OSError(1418): 线程没有打开的剪贴板。"}
+[2026-10-28][07:25:54][webview:yb@http://tauri.localhost/assets/index-C2Ch5GsY.js:11:18897][ERROR] unhandled promise rejection: {"reason":{"kind":"Clipboard","message":"Empty clipboard error, code = OSError(1418): 线程没有打开的剪贴板。"}}
+[2026-10-28][07:26:24][webview:yb@http://tauri.localhost/assets/index-C2Ch5GsY.js:11:18897][ERROR] invoke paste_clipboard_item failed: {"kind":"Clipboard","message":"Empty clipboard error, code = OSError(1418): 线程没有打开的剪贴板。"}
+[2026-10-28][07:26:24][webview:yb@http://tauri.localhost/assets/index-C2Ch5GsY.js:11:18897][ERROR] unhandled promise rejection: {"reason":{"kind":"Clipboard","message":"Empty clipboard error, code = OSError(1418): 线程没有打开的剪贴板。"}}
+[2026-10-28][07:27:00][webview:yb@http://tauri.localhost/assets/index-C2Ch5GsY.js:11:18897][ERROR] invoke paste_clipboard_item failed: {"kind":"Clipboard","message":"Empty clipboard error, code = OSError(1418): 线程没有打开的剪贴板。"}
+[2026-10-28][07:27:00][webview:yb@http://tauri.localhost/assets/index-C2Ch5GsY.js:11:18897][ERROR] unhandled promise rejection: {"reason":{"kind":"Clipboard","message":"Empty clipboard error, code = OSError(1418): 线程没有打开的剪贴板。"}}
+[2026-10-28][07:34:47][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5534 was replaced by 5542 before a readable snapshot (pending 0ms)
+[2026-10-28][07:34:49][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence=5545 owner_pid=Some(71404) read_ms=2077 outcome=Queued
+[2026-10-28][07:37:53][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence=5576 owner_pid=Some(19808) read_ms=834 outcome=Queued
+[2026-10-28][07:41:55][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5590 was replaced by 5593 before a readable snapshot (pending 0ms)
+[2026-10-28][07:41:55][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5593 was replaced by 5595 before a readable snapshot (pending 0ms)
+[2026-10-28][07:41:55][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5595 was replaced by 5598 before a readable snapshot (pending 0ms)
+[2026-10-28][07:41:55][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5598 was replaced by 5600 before a readable snapshot (pending 0ms)
+[2026-10-28][07:41:55][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5600 was replaced by 5602 before a readable snapshot (pending 0ms)
+[2026-10-28][07:41:55][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5602 was replaced by 5603 before a readable snapshot (pending 0ms)
+[2026-10-28][07:42:16][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5621 was replaced by 5622 before a readable snapshot (pending 7ms)
+[2026-10-28][07:42:16][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5622 was replaced by 5623 before a readable snapshot (pending 0ms)
+[2026-10-28][07:42:48][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence=5629 owner_pid=Some(19808) read_ms=30001 outcome=Empty
+[2026-10-28][08:01:37][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence=5635 owner_pid=Some(75200) read_ms=332 outcome=ReadFailed
+[2026-10-28][08:01:37][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence=5635 read_failed: retiring after 471ms and 16 failed attempts
+[2026-10-28][08:10:15][eco_paste_lib::settings::store][INFO] settings store ready at "<LOCALAPPDATA>\\com.ayangweb.eco-paste\\dev\\config\\settings.json"
+[2026-10-28][08:10:15][eco_paste_lib::db::init][INFO] sqlite pool ready at "<LOCALAPPDATA>\\com.ayangweb.eco-paste\\dev\\db\\clipboard.db"
+[2026-10-28][08:10:15][eco_paste_lib::clipboard::watcher][INFO] clipboard Windows sequence watcher started
+[2026-10-28][08:11:59][eco_paste_lib::settings::store][INFO] settings store ready at "<LOCALAPPDATA>\\com.ayangweb.eco-paste\\prod\\config\\settings.json"
+[2026-10-28][08:11:59][eco_paste_lib::db::init][INFO] sqlite pool ready at "<LOCALAPPDATA>\\com.ayangweb.eco-paste\\prod\\db\\clipboard.db"
+[2026-10-28][08:11:59][eco_paste_lib::clipboard::watcher][INFO] clipboard Windows sequence watcher started
+[2026-10-28][08:13:59][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5642 was replaced by 5643 before a readable snapshot (pending 0ms)
+[2026-10-28][08:13:59][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5643 was replaced by 5644 before a readable snapshot (pending 0ms)
+[2026-10-28][08:13:59][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5644 was replaced by 5647 before a readable snapshot (pending 0ms)
+[2026-10-28][08:13:59][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5647 was replaced by 5649 before a readable snapshot (pending 0ms)
+[2026-10-28][08:13:59][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5649 was replaced by 5654 before a readable snapshot (pending 1ms)
+[2026-10-28][08:13:59][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5654 was replaced by 5657 before a readable snapshot (pending 1ms)
+[2026-10-28][08:13:59][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5657 was replaced by 5658 before a readable snapshot (pending 0ms)
+[2026-10-28][08:13:59][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5658 was replaced by 5660 before a readable snapshot (pending 0ms)
+[2026-10-28][08:18:08][eco_paste_lib::settings::store][INFO] settings store ready at "<LOCALAPPDATA>\\com.ayangweb.eco-paste\\prod\\config\\settings.json"
+[2026-10-28][08:18:08][eco_paste_lib::db::init][INFO] sqlite pool ready at "<LOCALAPPDATA>\\com.ayangweb.eco-paste\\prod\\db\\clipboard.db"
+[2026-10-28][08:18:08][eco_paste_lib::clipboard::watcher][INFO] clipboard Windows sequence watcher started
+[2026-10-28][08:18:45][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5670 was replaced by 5672 before a readable snapshot (pending 0ms)
+[2026-10-28][08:18:45][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5672 was replaced by 5675 before a readable snapshot (pending 0ms)
+[2026-10-28][08:18:45][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5675 was replaced by 5677 before a readable snapshot (pending 0ms)
+[2026-10-28][08:18:45][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5677 was replaced by 5679 before a readable snapshot (pending 0ms)
+[2026-10-28][08:18:45][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5679 was replaced by 5680 before a readable snapshot (pending 0ms)
+[2026-10-28][08:18:45][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5680 was replaced by 5682 before a readable snapshot (pending 0ms)
+[2026-10-28][08:20:37][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5686 was replaced by 5687 before a readable snapshot (pending 0ms)
+[2026-10-28][08:20:37][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5687 was replaced by 5693 before a readable snapshot (pending 0ms)
+[2026-10-28][08:20:59][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5723 was replaced by 5725 before a readable snapshot (pending 30ms)
+[2026-10-28][08:21:10][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5738 was replaced by 5742 before a readable snapshot (pending 0ms)
+[2026-10-28][08:21:10][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5753 was replaced by 5754 before a readable snapshot (pending 21ms)
+[2026-10-28][08:24:08][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5770 was replaced by 5771 before a readable snapshot (pending 6ms)
+[2026-10-28][08:24:10][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence=5778 read_failed: retiring after 144ms and 16 failed attempts
+[2026-10-28][08:29:59][eco_paste_lib::settings::store][INFO] settings store ready at "<LOCALAPPDATA>\\com.ayangweb.eco-paste\\prod\\config\\settings.json"
+[2026-10-28][08:29:59][eco_paste_lib::db::init][INFO] sqlite pool ready at "<LOCALAPPDATA>\\com.ayangweb.eco-paste\\prod\\db\\clipboard.db"
+[2026-10-28][08:29:59][eco_paste_lib::clipboard::watcher][INFO] clipboard Windows sequence watcher started
+[2026-10-28][08:30:50][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5856 was replaced by 5862 before a readable snapshot (pending 0ms)
+[2026-10-28][08:36:24][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 5882 was replaced by 5889 before a readable snapshot (pending 0ms)
+[2026-10-28][08:38:34][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 6005 was replaced by 6017 before a readable snapshot (pending 0ms)
+[2026-10-28][08:40:41][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 6033 was replaced by 6034 before a readable snapshot (pending 0ms)
+[2026-10-28][08:40:41][eco_paste_lib::clipboard::watcher][WARN] clipboard sequence 6034 was replaced by 6039 before a readable snapshot (pending 0ms)

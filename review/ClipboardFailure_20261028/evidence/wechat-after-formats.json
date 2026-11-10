@@ -1,0 +1,79 @@
+{
+  "at": "2026-10-28T08:18:47.665197+00:00",
+  "sequence": 5685,
+  "owner_pid": 75200,
+  "formats": [
+    {
+      "code": 49161,
+      "name": "DataObject"
+    },
+    {
+      "code": 15,
+      "name": ""
+    },
+    {
+      "code": 49414,
+      "name": "UniformResourceLocatorW"
+    },
+    {
+      "code": 49406,
+      "name": "UniformResourceLocator"
+    },
+    {
+      "code": 8,
+      "name": ""
+    },
+    {
+      "code": 49607,
+      "name": "image/png"
+    },
+    {
+      "code": 49609,
+      "name": "image/bmp"
+    },
+    {
+      "code": 49612,
+      "name": "image/jpeg"
+    },
+    {
+      "code": 49655,
+      "name": "image/jpg"
+    },
+    {
+      "code": 50132,
+      "name": "image/pbm"
+    },
+    {
+      "code": 50133,
+      "name": "image/pgm"
+    },
+    {
+      "code": 50134,
+      "name": "image/ppm"
+    },
+    {
+      "code": 49226,
+      "name": "image/webp"
+    },
+    {
+      "code": 50135,
+      "name": "image/xbm"
+    },
+    {
+      "code": 50136,
+      "name": "image/xpm"
+    },
+    {
+      "code": 49171,
+      "name": "Ole Private Data"
+    },
+    {
+      "code": 2,
+      "name": ""
+    },
+    {
+      "code": 17,
+      "name": ""
+    }
+  ]
+}

@@ -5,9 +5,16 @@ import {
   type ClipboardPreviewState,
   getClipboardPreviewPayload,
 } from "@/commands";
+import { TAURI_EVENT } from "@/constants/events";
+import { useTauriListen } from "@/hooks/useTauriListen";
 import { settingsState } from "@/stores/settings";
 import { log } from "@/utils/log";
-import { readCachedPayload, writeCachedPayload } from "./cache";
+import {
+  beginPreviewCacheSession,
+  invalidateCachedPayload,
+  readCachedPayload,
+  writeCachedPayload,
+} from "./cache";
 import { PREVIEW_EXIT_ANIMATION_MS } from "./constants";
 
 /**
@@ -59,24 +66,59 @@ export function usePreviewPayload(
   const [loadingItemId, setLoadingItemId] = useState<string | null>(null);
   const latestRequestIdRef = useRef(0);
   const cacheRef = useRef(new Map<string, ClipboardPreviewPayload>());
+  const cacheSessionIdRef = useRef<number | null>(null);
+  const activePreviewRef = useRef(previewState);
+  activePreviewRef.current = previewState;
+  const [invalidationSerial, setInvalidationSerial] = useState(0);
   const { clipboard } = useSnapshot(settingsState);
   const redactSecrets = clipboard.sensitive.redactSecrets;
+
+  // 后端只在数据库提交后广播 clipboard://updated。
+  // 编辑时立即让对应 id 的旧预览失效；若正在展示该条，主动重新读取。
+  useTauriListen<{ id?: string }>(TAURI_EVENT.CLIPBOARD_UPDATED, (event) => {
+    const id = event.payload.id;
+    if (id) {
+      invalidateCachedPayload(cacheRef.current, id);
+    } else {
+      cacheRef.current.clear();
+    }
+
+    const current = activePreviewRef.current;
+    if (current && (!id || current.itemId === id)) {
+      setPayload(null);
+      setLoadingItemId(current.itemId);
+      setInvalidationSerial((value) => value + 1);
+    }
+  });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: resetToken 是销毁前清缓存的纯触发器。
   useEffect(() => {
     cacheRef.current.clear();
+    cacheSessionIdRef.current = null;
     latestRequestIdRef.current += 1;
     setLoadingItemId(null);
     setPayload(null);
   }, [resetToken]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: invalidationSerial 用于后台剪贴板更新事件主动触发再次拉取，即使不在 effect 内读取。
   useEffect(() => {
     if (!previewState) {
+      // 保留退出动画的最后一帧，但不保留可供下次打开直接命中的旧内容缓存。
+      cacheRef.current.clear();
+      cacheSessionIdRef.current = null;
       setLoadingItemId(null);
       return;
     }
 
     const state = previewState;
+    const newSession = cacheSessionIdRef.current !== state.sessionId;
+    cacheSessionIdRef.current = beginPreviewCacheSession(
+      cacheRef.current,
+      cacheSessionIdRef.current,
+      state.sessionId,
+    );
+    if (newSession) setPayload(null);
+
     let cancelled = false;
     latestRequestIdRef.current = state.requestId;
 
@@ -125,7 +167,7 @@ export function usePreviewPayload(
     return () => {
       cancelled = true;
     };
-  }, [previewState, redactSecrets]);
+  }, [previewState, redactSecrets, invalidationSerial]);
 
   return { loadingItemId, payload };
 }

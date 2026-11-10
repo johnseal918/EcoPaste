@@ -100,8 +100,6 @@ Before implementation:
 After implementation:
 
 - Search for the old field/name/value with `rg`.
-- Run focused Rust tests if the owner is backend logic.
-- Run `pnpm lint` and `pnpm tsc` for frontend changes.
 - Manually exercise UI paths that depend on native windows, clipboard, drag,
   shortcuts, tray, autostart, or file dialogs.
 

@@ -1,3 +1,4 @@
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useEffect } from "react";
 import { setClipboardWindowEditing } from "@/commands";
 import { isWinClipboardWindow } from "@/utils/is";
@@ -7,7 +8,7 @@ const EDITABLE_BLUR_RESTORE_DELAY_MS = 80;
 export const prepareClipboardWindowEditableFocus = async () => {
   if (!isWinClipboardWindow()) return;
 
-  await setClipboardWindowEditing(true);
+  await setClipboardWindowEditing(getCurrentWebviewWindow().label, true);
 };
 
 /**
@@ -17,6 +18,7 @@ export const useClipboardWindowEditableFocus = () => {
   useEffect(() => {
     if (!isWinClipboardWindow()) return;
 
+    const windowLabel = getCurrentWebviewWindow().label;
     let editing = false;
     let restoreTimer = 0;
 
@@ -31,7 +33,7 @@ export const useClipboardWindowEditableFocus = () => {
       if (editing === nextEditing) return;
 
       editing = nextEditing;
-      await setClipboardWindowEditing(nextEditing);
+      await setClipboardWindowEditing(windowLabel, nextEditing);
     };
 
     const activateEditableTarget = async (target: HTMLElement) => {
@@ -91,7 +93,7 @@ export const useClipboardWindowEditableFocus = () => {
       window.removeEventListener("focusout", scheduleRestore, true);
       window.removeEventListener("blur", scheduleRestore);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      void setClipboardWindowEditing(false);
+      void setClipboardWindowEditing(windowLabel, false);
     };
   }, []);
 };

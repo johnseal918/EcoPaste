@@ -31,9 +31,30 @@ export type ClipboardAction =
   | "revealInExplorer"
   | "toggleFavorite"
   | "togglePinned"
+  | "addPriority"
+  | "priorityFirst"
+  | "priorityLast"
+  | "priorityMoveTo"
+  | "priorityCancel"
+  | "pinFirst"
+  | "pinLast"
+  | "pinMoveTo"
   | "moveToGroup"
+  | "editContent"
   | "editNote"
   | "delete";
+
+/** 独立编辑窗口读取的完整正文（非历史列表摘要）。 */
+export interface EditableClipboardText {
+  text: string;
+  plainTextFromRich: boolean;
+  contentHash: string;
+}
+
+export interface SaveEditedClipboardTextResult {
+  id: string;
+  deduplicated: boolean;
+}
 
 export interface ClipboardItem {
   id: string;
@@ -52,6 +73,8 @@ export interface ClipboardItem {
   useCount: number;
   isFavorite: boolean;
   isPinned: boolean;
+  priorityOrder: number | null;
+  pinOrder: number | null;
   isSensitive: boolean;
   platform: ClipboardPlatform;
   note: string | null;
@@ -137,6 +160,8 @@ export interface ClipboardItemQuery {
   group?: ClipboardGroup;
   keyword?: string;
   sort?: ClipboardItemSort;
+  /** 严格按最近更新时间排列，忽略置顶/普通手动顺序的展示优先级。 */
+  recentFirst?: boolean;
   limit?: number;
   offset?: number;
 }

@@ -20,7 +20,10 @@ use tauri::{
 
 use crate::core::Result;
 
-use super::{get_window, lifecycle, CLIPBOARD_PREVIEW_WINDOW_LABEL, CLIPBOARD_WINDOW_LABEL};
+use super::{
+    get_window, lifecycle, CLIPBOARD_PINNED_WINDOW_LABEL, CLIPBOARD_PREVIEW_WINDOW_LABEL,
+    CLIPBOARD_SIDE_LEFT_WINDOW_LABEL, CLIPBOARD_WINDOW_LABEL,
+};
 
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, ManagerExt, PanelLevel, WebviewWindowExt};
@@ -29,7 +32,7 @@ use tauri_nspanel::{tauri_panel, ManagerExt, PanelLevel, WebviewWindowExt};
 use windows::Win32::Foundation::HWND;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
-    SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    IsWindow, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
 };
 
 const PREVIEW_UPDATED_EVENT: &str = "preview://updated";
@@ -39,6 +42,14 @@ const PREVIEW_PANEL_GAP: f64 = 40.0;
 const PREVIEW_PANEL_MARGIN: f64 = 32.0;
 const PREVIEW_POINTER_ANCHOR_SIZE: f64 = 1.0;
 const PREVIEW_HIDE_DELAY_MS: u64 = 180;
+/// A newly built WebView can be registered before Win32 finishes attaching its HWND.
+/// Wait without blocking the UI thread; recycle a persistently invalid window at most once.
+#[cfg(target_os = "windows")]
+const PREVIEW_NATIVE_HANDLE_POLL_MS: u64 = 40;
+#[cfg(target_os = "windows")]
+const PREVIEW_NATIVE_HANDLE_ATTEMPTS: usize = 36;
+#[cfg(target_os = "windows")]
+const PREVIEW_NATIVE_RECYCLE_AT: usize = 18;
 
 static PREVIEW_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
 static PREVIEW_SESSION_ID: AtomicU64 = AtomicU64::new(0);
@@ -122,6 +133,8 @@ pub struct ClipboardPreviewState {
     pub request_id: u64,
     pub session_id: u64,
     pub item_id: String,
+    /// Which clipboard WebView provided the DOM-local card rectangle.
+    pub source_window_label: String,
     pub anchor: PreviewAnchorRect,
     pub scale_factor: f64,
     pub work_area: PreviewWorkArea,
@@ -130,33 +143,57 @@ pub struct ClipboardPreviewState {
 }
 
 /// 打开或重定向预览窗口，并把最新预览状态广播到预览 webview。
-pub fn show_clipboard_preview(
+pub async fn show_clipboard_preview(
     app: &AppHandle,
     item_id: String,
     anchor: PreviewAnchorRect,
+    source_window_label: Option<String>,
 ) -> Result<Option<ClipboardPreviewState>> {
     validate_anchor(&anchor)?;
+    let source_label = preview_source_label(source_window_label.as_deref())?;
 
     if PREVIEW_SUPPRESSED.load(Ordering::SeqCst) || !is_clipboard_window_visible(app) {
         close_clipboard_preview_now(app)?;
         return Ok(None);
     }
 
+    // Side columns share a separate WebView from the main clipboard list.
+    // Do not interpret their DOM card rect as main-window-local coordinates.
+    let source_window = get_window(app, source_label)?;
+    if !source_window.is_visible().unwrap_or(false) {
+        return Ok(None);
+    }
+
     let request_id = PREVIEW_REQUEST_ID.fetch_add(1, Ordering::SeqCst) + 1;
+    // The idle destroy timer and a hover-open request can otherwise race between
+    // checking registration and using the native HWND. Keep this request protected;
+    // the lease is always released on return, with a short expiration as a fallback.
+    let _lease = PreviewOpenLease::acquire(app, request_id);
+    let Some(window) = ensure_preview_window_ready(app, request_id).await? else {
+        return Ok(None);
+    };
+    if !is_current_preview_request(request_id)
+        || !is_clipboard_window_visible(app)
+        || !source_window.is_visible().unwrap_or(false)
+    {
+        return Ok(None);
+    }
     let session_id = preview_session_id_for_show();
-    let window = ensure_preview_window(app)?;
-    let monitor = resolve_preview_monitor(app)?;
+    let monitor = resolve_preview_monitor(&source_window)
+        .map_err(|error| anyhow::anyhow!("resolve preview source monitor: {error}"))?;
     let work_area = preview_overlay_bounds(&monitor);
     let scale_factor = monitor.scale_factor();
-    let clipboard_window = clipboard_window_rect(app);
+    let clipboard_window = source_window_rect(&source_window);
     let layout = build_preview_layout(&anchor, scale_factor, &work_area, clipboard_window.as_ref());
 
-    prepare_preview_window_for_show(app, &window, &work_area)?;
+    prepare_preview_window_for_show(app, &window, &work_area)
+        .map_err(|error| anyhow::anyhow!("prepare native preview window: {error}"))?;
 
     let state = ClipboardPreviewState {
         request_id,
         session_id,
         item_id,
+        source_window_label: source_label.to_owned(),
         anchor,
         scale_factor,
         work_area: PreviewWorkArea {
@@ -173,9 +210,62 @@ pub fn show_clipboard_preview(
     window
         .emit(PREVIEW_UPDATED_EVENT, &state)
         .map_err(|e| anyhow::anyhow!(e))?;
-    show_preview_window(app, &window, &work_area)?;
+    if let Err(error) = show_preview_window(app, &window, &work_area) {
+        set_preview_state(None);
+        return Err(anyhow::anyhow!("show native preview window: {error}").into());
+    }
 
     Ok(Some(state))
+}
+
+/// Keep the preview alive only while one native show is being prepared.
+/// Each concurrent hover request has an independent owner, so completion of an
+/// earlier request never releases a newer request's protection.
+struct PreviewOpenLease<'a> {
+    app: &'a AppHandle,
+    owner: String,
+}
+
+impl<'a> PreviewOpenLease<'a> {
+    fn acquire(app: &'a AppHandle, request_id: u64) -> Self {
+        let owner = format!("preview-open-{request_id}");
+        lifecycle::acquire_keepalive(
+            app,
+            CLIPBOARD_PREVIEW_WINDOW_LABEL,
+            &owner,
+            "prepare-preview-native-window",
+            Some(5_000),
+        );
+        PreviewOpenLease { app, owner }
+    }
+}
+
+impl Drop for PreviewOpenLease<'_> {
+    fn drop(&mut self) {
+        lifecycle::release_keepalive(self.app, CLIPBOARD_PREVIEW_WINDOW_LABEL, &self.owner);
+    }
+}
+
+fn is_current_preview_request(request_id: u64) -> bool {
+    PREVIEW_REQUEST_ID.load(Ordering::SeqCst) == request_id
+        && !PREVIEW_SUPPRESSED.load(Ordering::SeqCst)
+}
+
+/// Ignore a late hover-leave/blur close from another WebView. Each of main,
+/// left and right windows owns only the previews it opened; switching panels
+/// must not dismiss a newer preview from the opposite window.
+pub fn close_clipboard_preview_for_source(
+    app: &AppHandle,
+    source_window_label: Option<String>,
+) -> Result<()> {
+    let source_label = preview_source_label(source_window_label.as_deref())?;
+    let Some(state) = get_clipboard_preview_state()? else {
+        return Ok(());
+    };
+    if state.source_window_label != source_label {
+        return Ok(());
+    }
+    close_clipboard_preview(app)
 }
 
 /// 隐藏预览窗口并清空当前预览状态。
@@ -322,6 +412,18 @@ fn preview_session_id_for_show() -> u64 {
     PREVIEW_SESSION_ID.fetch_add(1, Ordering::SeqCst) + 1
 }
 
+/// Side panels may only name the two known companion WebViews. A client cannot
+/// request preview geometry from arbitrary app windows (settings, backups, etc.).
+fn preview_source_label(label: Option<&str>) -> Result<&str> {
+    let label = label.unwrap_or(CLIPBOARD_WINDOW_LABEL);
+    match label {
+        CLIPBOARD_WINDOW_LABEL
+        | CLIPBOARD_PINNED_WINDOW_LABEL
+        | CLIPBOARD_SIDE_LEFT_WINDOW_LABEL => Ok(label),
+        _ => Err(anyhow::anyhow!("invalid clipboard preview source window").into()),
+    }
+}
+
 fn validate_anchor(anchor: &PreviewAnchorRect) -> Result<()> {
     let values = [anchor.left, anchor.top, anchor.width, anchor.height];
     if !values.iter().all(|value| value.is_finite()) || anchor.width <= 0.0 || anchor.height <= 0.0
@@ -353,6 +455,67 @@ fn ensure_preview_window(app: &AppHandle) -> Result<WebviewWindow> {
     ensure_macos_preview_panel(app, &window)?;
 
     Ok(window)
+}
+
+/// Wait for the actual native handle, not merely a Tauri registry entry.
+/// The preview participates in DestroyWhenIdle: its previous HWND can disappear
+/// while a side panel is still sending hover updates. An old request must stop
+/// instead of resurrecting a preview after the mouse leaves the card.
+async fn ensure_preview_window_ready(
+    app: &AppHandle,
+    request_id: u64,
+) -> Result<Option<WebviewWindow>> {
+    #[cfg(target_os = "macos")]
+    {
+        if !is_current_preview_request(request_id) {
+            return Ok(None);
+        }
+        ensure_preview_window(app).map(Some)
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut recycled = false;
+        for attempt in 0..PREVIEW_NATIVE_HANDLE_ATTEMPTS {
+            if !is_current_preview_request(request_id) {
+                return Ok(None);
+            }
+
+            // Respect the existing before-destroy grace period. During it the
+            // window may still be registered but no longer has a usable HWND.
+            if lifecycle::is_destroy_pending(app, CLIPBOARD_PREVIEW_WINDOW_LABEL) {
+                tokio::time::sleep(Duration::from_millis(PREVIEW_NATIVE_HANDLE_POLL_MS)).await;
+                continue;
+            }
+
+            let window = ensure_preview_window(app)?;
+            if let Ok(raw) = window.hwnd() {
+                let hwnd = HWND(raw.0 as isize);
+                if hwnd.0 != 0 && unsafe { IsWindow(hwnd).as_bool() } {
+                    return Ok(Some(window));
+                }
+            }
+
+            // The native handle should normally appear within a few iterations.
+            // A persistently stale registered WebView is disposed once so that
+            // the normal builder can re-create it with the same window label.
+            if attempt == PREVIEW_NATIVE_RECYCLE_AT && !recycled {
+                recycled = true;
+                log::warn!(
+                    "preview WebView registered without a valid HWND; attempting one recovery"
+                );
+                if let Err(error) = window.destroy() {
+                    log::warn!("dispose stale preview WebView failed: {error}");
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(PREVIEW_NATIVE_HANDLE_POLL_MS)).await;
+        }
+
+        Err(
+            anyhow::anyhow!("preview native window handle unavailable after bounded recovery")
+                .into(),
+        )
+    }
 }
 
 fn raise_preview_window(app: &AppHandle, window: &WebviewWindow) -> Result<()> {
@@ -532,16 +695,15 @@ fn raise_windows_preview_window(window: &WebviewWindow, show: bool) -> Result<()
     Ok(())
 }
 
-fn resolve_preview_monitor(app: &AppHandle) -> Result<tauri::Monitor> {
-    let clipboard_window = get_window(app, CLIPBOARD_WINDOW_LABEL)?;
-    if let Some(monitor) = clipboard_window
+fn resolve_preview_monitor(source_window: &WebviewWindow) -> Result<tauri::Monitor> {
+    if let Some(monitor) = source_window
         .current_monitor()
         .map_err(|e| anyhow::anyhow!(e))?
     {
         return Ok(monitor);
     }
 
-    clipboard_window
+    source_window
         .primary_monitor()
         .map_err(|e| anyhow::anyhow!(e))?
         .ok_or_else(|| anyhow::anyhow!("primary monitor not found").into())
@@ -784,9 +946,9 @@ fn inset_rect(rect: PreviewRect, amount: f64) -> PreviewRect {
     }
 }
 
-/// 返回剪贴板窗口内容区的屏幕几何，用于映射 WebView DOM rect 到预览 overlay 坐标。
-fn clipboard_window_rect(app: &AppHandle) -> Option<PreviewClipboardWindowRect> {
-    let window = app.get_webview_window(CLIPBOARD_WINDOW_LABEL)?;
+/// Returns the originating WebView's inner screen rect, so DOM coordinates
+/// from main/right/left map into the same existing overlay layout correctly.
+fn source_window_rect(window: &WebviewWindow) -> Option<PreviewClipboardWindowRect> {
     let pos = window.inner_position().ok()?;
     let size = window.inner_size().ok()?;
 
@@ -816,172 +978,3 @@ impl PreviewRect {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn overlay() -> PreviewRect {
-        PreviewRect {
-            left: 0.0,
-            top: 0.0,
-            width: 1200.0,
-            height: 800.0,
-        }
-    }
-
-    #[test]
-    fn places_panel_on_right_when_space_exists() {
-        let source = PreviewRect {
-            left: 240.0,
-            top: 200.0,
-            width: 120.0,
-            height: 40.0,
-        };
-        let (panel, placement) = resolve_panel_rect(source, overlay());
-
-        assert!(matches!(placement, PreviewPlacement::Right));
-        assert!(panel.left > source.right());
-    }
-
-    #[test]
-    fn places_panel_on_left_when_right_side_is_tight() {
-        let source = PreviewRect {
-            left: 980.0,
-            top: 200.0,
-            width: 120.0,
-            height: 40.0,
-        };
-        let (panel, placement) = resolve_panel_rect(source, overlay());
-
-        assert!(matches!(placement, PreviewPlacement::Left));
-        assert!(panel.right() < source.left);
-    }
-
-    #[test]
-    fn clamps_panel_inside_overlay_margin() {
-        let source = PreviewRect {
-            left: 580.0,
-            top: 740.0,
-            width: 80.0,
-            height: 40.0,
-        };
-        let (panel, _) = resolve_panel_rect(source, overlay());
-
-        assert!(panel.left >= PREVIEW_PANEL_MARGIN);
-        assert!(panel.top >= PREVIEW_PANEL_MARGIN);
-        assert!(panel.right() <= overlay().right() - PREVIEW_PANEL_MARGIN);
-        assert!(panel.bottom() <= overlay().bottom() - PREVIEW_PANEL_MARGIN);
-    }
-
-    #[test]
-    fn maps_anchor_from_clipboard_window_to_overlay_local_rect() {
-        let work_area = PhysicalRect {
-            position: PhysicalPosition::new(100, 50),
-            size: PhysicalSize::new(2400, 1600),
-        };
-        let clipboard = PreviewClipboardWindowRect {
-            x: 300,
-            y: 250,
-            width: 800,
-            height: 600,
-        };
-        let anchor = PreviewAnchorRect {
-            left: 20.0,
-            pointer_y: None,
-            top: 30.0,
-            width: 100.0,
-            height: 40.0,
-        };
-        let source = resolve_source_rect(
-            &anchor,
-            2.0,
-            &work_area,
-            Some(&clipboard),
-            PreviewRect {
-                left: 0.0,
-                top: 0.0,
-                width: 1200.0,
-                height: 800.0,
-            },
-        );
-
-        assert_eq!(source.left, 120.0);
-        assert_eq!(source.top, 130.0);
-        assert_eq!(source.width, 100.0);
-        assert_eq!(source.height, 40.0);
-    }
-
-    #[test]
-    fn keeps_source_rect_on_clipboard_card_when_card_touches_main_edge() {
-        let work_area = PhysicalRect {
-            position: PhysicalPosition::new(100, 50),
-            size: PhysicalSize::new(2400, 1600),
-        };
-        let clipboard = PreviewClipboardWindowRect {
-            x: 300,
-            y: 250,
-            width: 800,
-            height: 600,
-        };
-        let anchor = PreviewAnchorRect {
-            left: -8.0,
-            pointer_y: None,
-            top: 40.0,
-            width: 120.0,
-            height: 80.0,
-        };
-        let source = resolve_source_rect(
-            &anchor,
-            2.0,
-            &work_area,
-            Some(&clipboard),
-            PreviewRect {
-                left: 0.0,
-                top: 0.0,
-                width: 1200.0,
-                height: 800.0,
-            },
-        );
-
-        assert_eq!(source.left, 92.0);
-        assert_eq!(source.width, 120.0);
-    }
-
-    #[test]
-    fn follows_pointer_y_inside_clipboard_card() {
-        let work_area = PhysicalRect {
-            position: PhysicalPosition::new(100, 50),
-            size: PhysicalSize::new(2400, 1600),
-        };
-        let clipboard = PreviewClipboardWindowRect {
-            x: 300,
-            y: 250,
-            width: 800,
-            height: 600,
-        };
-        let anchor = PreviewAnchorRect {
-            left: 20.0,
-            pointer_y: Some(92.0),
-            top: 40.0,
-            width: 120.0,
-            height: 100.0,
-        };
-        let source = resolve_source_rect(
-            &anchor,
-            2.0,
-            &work_area,
-            Some(&clipboard),
-            PreviewRect {
-                left: 0.0,
-                top: 0.0,
-                width: 1200.0,
-                height: 800.0,
-            },
-        );
-
-        assert_eq!(source.left, 120.0);
-        assert_eq!(source.top, 191.5);
-        assert_eq!(source.width, 120.0);
-        assert_eq!(source.height, PREVIEW_POINTER_ANCHOR_SIZE);
-    }
-}

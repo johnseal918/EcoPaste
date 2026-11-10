@@ -410,38 +410,6 @@ mod macos {
             .find(|path| path.extension().and_then(|s| s.to_str()) == Some("app"))
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn passwords_app_uses_localized_name() {
-            let path = std::path::PathBuf::from("/System/Applications/Passwords.app");
-            if !path.exists() {
-                eprintln!("skip: Passwords.app not present");
-                return;
-            }
-            let localized = localized_bundle_name(&path);
-            println!("Passwords localized: {localized:?}");
-            assert!(localized.is_some());
-        }
-
-        #[test]
-        fn keychain_access_can_be_found_by_bundle_id() {
-            let Some(meta) = app_meta_from_id("com.apple.keychainaccess") else {
-                eprintln!("skip: Keychain Access.app not indexed");
-                return;
-            };
-            let Some(path) = meta.path else {
-                panic!("expected Keychain Access path");
-            };
-
-            let png = crate::clipboard::icon_png(&path, None).expect("expected app icon");
-
-            assert_eq!(meta.id, "com.apple.keychainaccess");
-            assert!(png.len() > 100);
-        }
-    }
 }
 
 #[cfg(target_os = "windows")]

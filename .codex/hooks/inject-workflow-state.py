@@ -243,12 +243,12 @@ def _codex_mode_banner(config: dict) -> str:
                 mode = cfg_mode
     if mode == "sub-agent":
         meaning = (
-            "sub-agent: implement/check work defaults to Trellis sub-agents; "
+            "sub-agent: implementation uses Trellis sub-agents; a check agent is used only for a specific unresolved current-goal question; "
             "the main session still coordinates, clarifies, updates specs, commits, and finishes."
         )
     else:
         meaning = (
-            "inline: the main session implements/checks directly; "
+            "inline: the main session implements directly and uses applicable delivery evidence; no separate check phase is implied; "
             "do not dispatch implement/check sub-agents."
         )
     return f"<codex-mode>{meaning}</codex-mode>"

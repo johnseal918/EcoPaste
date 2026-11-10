@@ -28,6 +28,16 @@ pub async fn init(app: &AppHandle) -> Result<SqlitePool> {
         .await
         .context("failed to run sqlite migrations")?;
 
+    // Repair only safe, unprotected legacy duplicate text rows. The former
+    // raw HTML/RTF hash policy could save identical visible text more than
+    // once; never silently remove favorites, pins, notes or manual orders.
+    let consolidated = crate::db::items::consolidate_safe_text_duplicates(&pool)
+        .await
+        .context("failed to reconcile ordinary text duplicates")?;
+    if consolidated > 0 {
+        log::info!("consolidated {consolidated} ordinary duplicate clipboard texts");
+    }
+
     log::info!("sqlite pool ready at {path:?}");
     Ok(pool)
 }

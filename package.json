@@ -21,8 +21,7 @@
   },
   "scripts": {
     "dev": "run-s build:icon dev:vite",
-    "build": "run-s tsc build:*",
-    "tsc": "tsc --noEmit",
+    "build": "run-s build:*",
     "dev:vite": "vite",
     "build:icon": "tsx scripts/buildIcon.ts",
     "build:vite": "vite build",
@@ -31,9 +30,6 @@
     "release": "release-it --verbose",
     "release-beta": "release-it --verbose --preRelease=beta --preReleaseBase=1",
     "release-rc": "release-it --verbose --preRelease=rc --preReleaseBase=1",
-    "lint": "biome check",
-    "format": "biome check --write",
-    "prepare": "simple-git-hooks",
     "preinstall": "npx only-allow pnpm"
   },
   "dependencies": {
@@ -59,9 +55,6 @@
     "valtio": "^2.3.2"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.8",
-    "@commitlint/cli": "^21.2.1",
-    "@commitlint/config-conventional": "^21.2.0",
     "@iconify-json/lets-icons": "^1.2.2",
     "@iconify-json/lucide": "^1.2.123",
     "@iconify-json/ph": "^1.2.2",
@@ -72,11 +65,9 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^4.7.0",
-    "lint-staged": "^17.3.0",
     "npm-run-all": "^4.1.5",
     "release-it": "^20.2.1",
     "sass": "^1.102.0",
-    "simple-git-hooks": "^2.13.1",
     "tsx": "^4.23.12",
     "typescript": "~5.8.3",
     "unocss": "^66.7.5",

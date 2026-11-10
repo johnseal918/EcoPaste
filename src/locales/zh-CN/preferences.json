@@ -479,6 +479,10 @@
         }
       },
       "preview": {
+        "backgroundOpacity": {
+          "description": "默认100%完全不透明，50%～100%可调，每档5%；只改变预览背景，不影响文字。",
+          "title": "预览窗口背景不透明度"
+        },
         "delay": {
           "description": "设置鼠标悬停多久后显示预览。",
           "options": {

@@ -1,0 +1,9 @@
+ M src-tauri/Cargo.lock
+ M src-tauri/src/clipboard/mod.rs
+ M src-tauri/src/clipboard/read.rs
+ M src-tauri/src/clipboard/source.rs
+ M src-tauri/src/clipboard/write.rs
+ M src-tauri/src/commands/clipboard.rs
+?? .build-env/
+?? baselines/
+?? review/

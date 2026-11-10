@@ -21,6 +21,10 @@ import {
   type UseClipboardPreviewControllerOptions,
   type WindowVisibilityPayload,
 } from "./previewController";
+import {
+  canStartPreviewOpen,
+  PREVIEW_OPEN_FAILURE_COOLDOWN_MS,
+} from "./previewRequestPolicy";
 
 const KEYBOARD_PREVIEW_MAX_FRAMES = 36;
 const KEYBOARD_PREVIEW_STABLE_FRAMES = 2;
@@ -46,7 +50,8 @@ interface KeyboardPreviewTarget {
 export function useClipboardPreviewController(
   options: UseClipboardPreviewControllerOptions,
 ) {
-  const { getActiveItem, itemElementMapRef, onHoverSelect } = options;
+  const { getActiveItem, itemElementMapRef, onHoverSelect, sourceWindowLabel } =
+    options;
   const [previewSession, setPreviewSession] = useState<PreviewSession | null>(
     null,
   );
@@ -55,6 +60,11 @@ export function useClipboardPreviewController(
   const clipboardWindowVisibleRef = useRef(true);
   const previewSessionRef = useRef<PreviewSession | null>(null);
   const previewOpenRequestIdRef = useRef(0);
+  const previewOpenInFlightRef = useRef<{
+    itemId: string;
+    requestId: number;
+  } | null>(null);
+  const previewOpenRetryAfterRef = useRef(0);
   const previewMoveFrameRef = useRef<number | null>(null);
   const previewMoveTargetRef = useRef<{
     item: ClipboardItem;
@@ -66,6 +76,10 @@ export function useClipboardPreviewController(
     item: ClipboardItem;
     pointerY: number;
   } | null>(null);
+  // A WebView can synthesize pointerenter when a hidden window becomes
+  // visible or list rows are re-mounted under a stationary cursor. Hover
+  // previews must be triggered by real pointer movement in this session.
+  const lastPointerLocationRef = useRef<{ x: number; y: number } | null>(null);
   const settingsSnapshot = useSnapshot(settingsState);
   const previewSettings = settingsSnapshot.clipboard.preview;
 
@@ -75,7 +89,7 @@ export function useClipboardPreviewController(
       clearHoverTimer(hoverHideTimerRef);
       previewSessionRef.current = null;
       setPreviewSession(null);
-      closeClipboardPreviewSilently("hoverDisabled");
+      closeClipboardPreviewSilently("hoverDisabled", sourceWindowLabel);
       return;
     }
 
@@ -87,12 +101,13 @@ export function useClipboardPreviewController(
       clearHoverTimer(hoverHideTimerRef);
       previewSessionRef.current = null;
       setPreviewSession(null);
-      closeClipboardPreviewSilently("spaceDisabled");
+      closeClipboardPreviewSilently("spaceDisabled", sourceWindowLabel);
     }
   }, [
     previewSettings.hoverEnabled,
     previewSettings.spaceEnabled,
     previewSession?.trigger,
+    sourceWindowLabel,
   ]);
 
   useEffect(() => {
@@ -100,6 +115,7 @@ export function useClipboardPreviewController(
       clearHoverTimer(hoverTimerRef);
       clearHoverTimer(hoverHideTimerRef);
       pendingHoverTargetRef.current = null;
+      previewOpenInFlightRef.current = null;
       if (keyboardPreviewFrameRef.current !== null) {
         window.cancelAnimationFrame(keyboardPreviewFrameRef.current);
         keyboardPreviewFrameRef.current = null;
@@ -116,25 +132,38 @@ export function useClipboardPreviewController(
   const handleWindowVisibility = (event: {
     payload: WindowVisibilityPayload;
   }) => {
-    if (event.payload.label !== WINDOW_LABEL.CLIPBOARD) return;
+    const { label, visible } = event.payload;
+    // Side hosts have their own WebViews. The main-window lifecycle and our
+    // own host lifecycle can both invalidate a hover preview.
+    if (label !== WINDOW_LABEL.CLIPBOARD && label !== sourceWindowLabel) return;
 
-    clipboardWindowVisibleRef.current = event.payload.visible;
-    if (event.payload.visible) return;
-
-    closePreview("windowHidden");
+    clipboardWindowVisibleRef.current = visible;
+    lastPointerLocationRef.current = null;
+    // Rust already invalidates and hides any old native preview before main
+    // show. Only reset local state here; sending an asynchronous close on show
+    // could race with the first legitimate new hover request.
+    if (visible) {
+      resetPreviewLocally();
+    } else {
+      closePreview("windowHidden");
+    }
   };
 
   useTauriListen(TAURI_EVENT.WINDOW_VISIBILITY, handleWindowVisibility);
 
   const handleWindowBlur = () => {
-    if (!previewSessionRef.current) return;
-
-    closePreview("windowBlur");
+    lastPointerLocationRef.current = null;
+    // A pending hover timer is not represented by previewSessionRef yet.
+    // Cancel it even if the preview has not opened.
+    if (hoverTimerRef.current !== null || previewSessionRef.current) {
+      closePreview("windowBlur");
+    }
   };
 
   useEventListener("blur", handleWindowBlur, { target: window });
 
   const handleWindowResize = () => {
+    lastPointerLocationRef.current = null;
     closePreview("windowResize");
   };
 
@@ -143,103 +172,143 @@ export function useClipboardPreviewController(
   /**
    * 关闭预览窗口并清理本地预览会话。
    */
-  const closePreview = (reason: string) => {
+  const resetPreviewLocally = () => {
     previewOpenRequestIdRef.current += 1;
     cancelHoverPreview();
     cancelHoverHide();
     cancelPreviewMoveFrame();
     cancelKeyboardPreviewFrame();
+    previewOpenInFlightRef.current = null;
     commitPreviewSession(null);
-    closeClipboardPreviewSilently(reason);
+  };
+
+  const closePreview = (reason: string) => {
+    resetPreviewLocally();
+    closeClipboardPreviewSilently(reason, sourceWindowLabel);
   };
 
   /**
-   * 卡片指针进入：keyboard 预览直接复用键盘重定向；hover 预览按延迟打开或重定向。
+   * A pointerenter alone is not user intent: Windows/WebView can emit it
+   * when the window is shown under an unmoving cursor. Space-key previews
+   * retain their existing keyboard retargeting behavior.
    */
   const handleItemPointerEnter = (
     item: ClipboardItem,
     event: ReactPointerEvent<HTMLDivElement>,
   ) => {
-    const pointerY = event.clientY;
-
-    onHoverSelect(item.id);
-
     if (!clipboardWindowVisibleRef.current) return;
-    if (previewSessionRef.current?.trigger === "keyboard") {
-      cancelHoverPreview();
-      cancelHoverHide();
+    // Establish a position baseline without opening a preview. A subsequent
+    // genuinely different pointermove coordinate is required to arm hover.
+    lastPointerLocationRef.current = { x: event.clientX, y: event.clientY };
+    if (previewSessionRef.current?.trigger !== "keyboard") return;
 
-      if (previewSessionRef.current.itemId === item.id) {
-        cancelKeyboardPreviewFrame();
-        return;
-      }
+    cancelHoverPreview();
+    cancelHoverHide();
 
-      scheduleKeyboardPreviewMove(item);
+    if (previewSessionRef.current.itemId === item.id) {
+      cancelKeyboardPreviewFrame();
       return;
     }
-    if (!previewSettings.hoverEnabled) return;
+    scheduleKeyboardPreviewMove(item);
+  };
 
+  /**
+   * Only a real pointer movement over the actual card arms hover preview.
+   * New show sessions start with no recorded position; synthetic stationary
+   * moves with unchanged coordinates must not resurrect a previous item.
+   */
+  const handleItemPointerMove = (
+    item: ClipboardItem,
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (!clipboardWindowVisibleRef.current) return;
+    if (event.pointerType !== "mouse" && event.pointerType !== "pen") return;
+
+    const next = { x: event.clientX, y: event.clientY };
+    const previous = lastPointerLocationRef.current;
+    lastPointerLocationRef.current = next;
+    // Demand two different observed positions in the current visible
+    // session. The first move can be a WebView wake-up/hit-test event with a
+    // stale movementX/Y even if the user has not moved their mouse.
+    const moved =
+      previous !== null &&
+      (previous.x !== next.x || previous.y !== next.y);
+    if (!moved) return;
+    if (!pointerIsInsideItem(item.id)) return;
+
+    onHoverSelect(item.id);
+    if (previewSessionRef.current?.trigger === "keyboard") return;
+    if (!settingsState.clipboard.preview.hoverEnabled) return;
+
+    if (hoverTimerRef.current !== null) {
+      if (pendingHoverTargetRef.current?.item.id === item.id) {
+        pendingHoverTargetRef.current = { item, pointerY: next.y };
+      } else {
+        startHoverPreview(item, next.y);
+      }
+      return;
+    }
+
+    if (
+      previewSessionRef.current?.trigger === "hover" &&
+      previewSessionRef.current.itemId === item.id
+    ) {
+      previewMoveTargetRef.current = { item, pointerY: next.y };
+      if (previewMoveFrameRef.current !== null) return;
+
+      previewMoveFrameRef.current = window.requestAnimationFrame(() => {
+        previewMoveFrameRef.current = null;
+        const target = previewMoveTargetRef.current;
+        previewMoveTargetRef.current = null;
+        if (!target || !pointerIsInsideItem(target.item.id)) return;
+        if (previewSessionRef.current?.trigger !== "hover") return;
+        if (previewSessionRef.current.itemId !== target.item.id) return;
+        void openPreviewForItem(target.item, "hover", target.pointerY);
+      });
+      return;
+    }
+
+    startHoverPreview(item, next.y);
+  };
+
+  const startHoverPreview = (item: ClipboardItem, pointerY: number) => {
     cancelHoverPreview();
     cancelHoverHide();
     pendingHoverTargetRef.current = { item, pointerY };
 
     if (previewSessionRef.current?.trigger === "hover") {
-      if (previewSessionRef.current.itemId === item.id) return;
-
       void openPreviewForItem(item, "hover", pointerY);
       return;
     }
 
     hoverTimerRef.current = window.setTimeout(() => {
       hoverTimerRef.current = null;
-
       if (!clipboardWindowVisibleRef.current) return;
       if (!settingsState.clipboard.preview.hoverEnabled) return;
-
       const target = pendingHoverTargetRef.current;
-
       if (!target || target.item.id !== item.id) return;
-
+      if (!pointerIsInsideItem(item.id)) return;
       void openPreviewForItem(target.item, "hover", target.pointerY);
     }, HOVER_DELAY_MS[previewSettings.hoverDelayMs]);
   };
 
-  /**
-   * Hover 预览打开后，同一卡片内移动鼠标会持续重定向锚点和预览卡片。
-   */
-  const handleItemPointerMove = (
-    item: ClipboardItem,
-    event: ReactPointerEvent<HTMLDivElement>,
-  ) => {
-    const pointerY = event.clientY;
-
-    if (hoverTimerRef.current !== null) {
-      pendingHoverTargetRef.current = { item, pointerY };
+  /** Confirm the latest observed pointer still hit-tests the same card. */
+  function pointerIsInsideItem(itemId: string) {
+    const point = lastPointerLocationRef.current;
+    const element = itemElementMapRef.current.get(itemId);
+    if (!point || !element) return false;
+    const rect = element.getBoundingClientRect();
+    if (
+      point.x < rect.left ||
+      point.x >= rect.right ||
+      point.y < rect.top ||
+      point.y >= rect.bottom
+    ) {
+      return false;
     }
-
-    if (previewSessionRef.current?.trigger !== "hover") return;
-    if (previewSessionRef.current.itemId !== item.id) return;
-
-    previewMoveTargetRef.current = {
-      item,
-      pointerY,
-    };
-
-    if (previewMoveFrameRef.current !== null) return;
-
-    previewMoveFrameRef.current = window.requestAnimationFrame(() => {
-      previewMoveFrameRef.current = null;
-
-      const target = previewMoveTargetRef.current;
-      previewMoveTargetRef.current = null;
-
-      if (!target) return;
-      if (previewSessionRef.current?.trigger !== "hover") return;
-      if (previewSessionRef.current.itemId !== target.item.id) return;
-
-      void openPreviewForItem(target.item, "hover", target.pointerY);
-    });
-  };
+    const hit = document.elementFromPoint(point.x, point.y);
+    return hit !== null && element.contains(hit);
+  }
 
   /**
    * Hover 离开单个卡片时进入准备隐藏状态；进入新卡片会取消隐藏。
@@ -252,6 +321,7 @@ export function useClipboardPreviewController(
    * 指针离开列表区域时结束 hover preview，卡片间移动只做 retarget。
    */
   const handlePreviewAreaPointerLeave = () => {
+    lastPointerLocationRef.current = null;
     scheduleHoverHide("hoverAreaLeave");
   };
 
@@ -261,6 +331,7 @@ export function useClipboardPreviewController(
   const handleDocumentPointerOut = (event: PointerEvent) => {
     if (event.relatedTarget !== null) return;
 
+    lastPointerLocationRef.current = null;
     scheduleHoverHide("documentPointerOut");
   };
 
@@ -272,6 +343,7 @@ export function useClipboardPreviewController(
    * 浏览器取消后续指针事件时关闭 hover preview，避免预览残留。
    */
   const handleDocumentPointerCancel = () => {
+    lastPointerLocationRef.current = null;
     scheduleHoverHide("documentPointerCancel");
   };
 
@@ -351,6 +423,17 @@ export function useClipboardPreviewController(
     pointerY?: number,
   ) => {
     if (!clipboardWindowVisibleRef.current) return;
+    if (trigger === "hover" && !pointerIsInsideItem(item.id)) return;
+    if (
+      !canStartPreviewOpen(
+        item.id,
+        previewOpenInFlightRef.current?.itemId ?? null,
+        previewOpenRetryAfterRef.current,
+        Date.now(),
+      )
+    ) {
+      return;
+    }
 
     const element = itemElementMapRef.current.get(item.id);
     const rect = element?.getBoundingClientRect();
@@ -359,18 +442,23 @@ export function useClipboardPreviewController(
 
     const requestId = previewOpenRequestIdRef.current + 1;
     previewOpenRequestIdRef.current = requestId;
+    previewOpenInFlightRef.current = { itemId: item.id, requestId };
     commitPreviewSession({ itemId: item.id, trigger });
 
     try {
       if (!clipboardWindowVisibleRef.current) return;
 
-      const state = await showClipboardPreview(item.id, {
-        height: rect.height,
-        left: rect.left,
-        pointerY,
-        top: rect.top,
-        width: rect.width,
-      });
+      const state = await showClipboardPreview(
+        item.id,
+        {
+          height: rect.height,
+          left: rect.left,
+          pointerY,
+          top: rect.top,
+          width: rect.width,
+        },
+        sourceWindowLabel,
+      );
 
       if (requestId !== previewOpenRequestIdRef.current) return;
       if (!state || !clipboardWindowVisibleRef.current) {
@@ -378,10 +466,16 @@ export function useClipboardPreviewController(
       }
     } catch (error) {
       if (requestId === previewOpenRequestIdRef.current) {
+        previewOpenRetryAfterRef.current =
+          Date.now() + PREVIEW_OPEN_FAILURE_COOLDOWN_MS;
         log.error("show clipboard preview failed", { error, trigger });
         commitPreviewSession(null);
       }
       return;
+    } finally {
+      if (previewOpenInFlightRef.current?.requestId === requestId) {
+        previewOpenInFlightRef.current = null;
+      }
     }
   };
 
