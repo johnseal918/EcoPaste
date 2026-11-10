@@ -139,9 +139,14 @@ export function useClipboardPreviewController(
 
     clipboardWindowVisibleRef.current = visible;
     lastPointerLocationRef.current = null;
-    // Reset on SHOW as well as HIDE. Dormant WebViews can miss the hide event;
-    // never resume an old timer, hover target or pending native show request.
-    closePreview(visible ? "windowShownReset" : "windowHidden");
+    // Rust already invalidates and hides any old native preview before main
+    // show. Only reset local state here; sending an asynchronous close on show
+    // could race with the first legitimate new hover request.
+    if (visible) {
+      resetPreviewLocally();
+    } else {
+      closePreview("windowHidden");
+    }
   };
 
   useTauriListen(TAURI_EVENT.WINDOW_VISIBILITY, handleWindowVisibility);
@@ -167,13 +172,18 @@ export function useClipboardPreviewController(
   /**
    * 关闭预览窗口并清理本地预览会话。
    */
-  const closePreview = (reason: string) => {
+  const resetPreviewLocally = () => {
     previewOpenRequestIdRef.current += 1;
     cancelHoverPreview();
     cancelHoverHide();
     cancelPreviewMoveFrame();
     cancelKeyboardPreviewFrame();
+    previewOpenInFlightRef.current = null;
     commitPreviewSession(null);
+  };
+
+  const closePreview = (reason: string) => {
+    resetPreviewLocally();
     closeClipboardPreviewSilently(reason, sourceWindowLabel);
   };
 
@@ -214,11 +224,12 @@ export function useClipboardPreviewController(
     const next = { x: event.clientX, y: event.clientY };
     const previous = lastPointerLocationRef.current;
     lastPointerLocationRef.current = next;
+    // Demand two different observed positions in the current visible
+    // session. The first move can be a WebView wake-up/hit-test event with a
+    // stale movementX/Y even if the user has not moved their mouse.
     const moved =
-      (previous !== null &&
-        (previous.x !== next.x || previous.y !== next.y)) ||
-      event.nativeEvent.movementX !== 0 ||
-      event.nativeEvent.movementY !== 0;
+      previous !== null &&
+      (previous.x !== next.x || previous.y !== next.y);
     if (!moved) return;
     if (!pointerIsInsideItem(item.id)) return;
 
